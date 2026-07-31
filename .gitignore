@@ -1,0 +1,52 @@
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# JavaScript and TypeScript
+node_modules/
+.next/
+out/
+dist/
+build/
+.turbo/
+*.tsbuildinfo
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+
+# Model artifacts and data
+artifacts/*
+!artifacts/.gitkeep
+*.onnx
+*.joblib
+*.pkl
+*.pickle
+data/
+
+# Logs and runtime state
+*.log
+logs/
+tmp/
+temp/
+*.pid
+
+# Test output
+playwright-report/
+test-results/
+coverage/
+
+# Editors and operating systems
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+Desktop.ini

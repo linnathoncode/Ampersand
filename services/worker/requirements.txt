@@ -1,0 +1,12 @@
+pandas
+scikit-learn
+onnx
+onnxruntime
+skl2onnx
+psycopg[binary]
+redis
+pydantic
+python-dotenv
+pytest
+pytest-cov
+
