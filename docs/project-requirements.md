@@ -33,7 +33,7 @@ Each invariant must have a separately named test that fails when its enforcement
 
 - Nucleus is the single public backend gateway.
 - PostgreSQL is the single source of truth.
-- Redis is used for queueing and temporary coordination.
+- PostgreSQL provides durable job state and transactional worker job claiming.
 - The worker has no public API.
 - Next.js must not contain route handlers or a custom backend proxy.
 - Model artifacts should use ONNX where supported.
@@ -51,7 +51,7 @@ Each invariant must have a separately named test that fails when its enforcement
 | Database access | Drizzle ORM |
 | Validation | TypeBox and JSON Schema |
 | Database | PostgreSQL |
-| Queue and cache | Redis |
+| Job queue | PostgreSQL row locking |
 | Worker | Python |
 | Data processing | Pandas |
 | Machine learning | Scikit-learn |

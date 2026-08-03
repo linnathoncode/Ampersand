@@ -4,6 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "config:build": "bun scripts/build-config.ts",
+    "config:validate": "bun run config:build && bunx nucleus-core-ts validate src/config.json",
+    "schema:generate": "bun run config:build && bunx nucleus-core-ts generate src/config.json src/drizzle",
     "dev": "bun --watch src/index.ts",
     "start": "bun src/index.ts",
     "typecheck": "tsc --noEmit"

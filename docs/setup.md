@@ -40,7 +40,7 @@ The activation helper searches the current directory and its parents for `.venv`
 
 ## Local Infrastructure
 
-Start PostgreSQL and Redis in Docker:
+Start PostgreSQL in Docker:
 
 ```powershell
 bun run infra:up

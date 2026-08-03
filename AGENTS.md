@@ -3,7 +3,7 @@
 - Keep changes small, modular, and within the assigned scope. Preserve unrelated files and existing work.
 - Build the smallest end-to-end version that satisfies the current requirement before adding abstractions or optional features.
 - Treat Nucleus as the sole public gateway for authentication, authorization, quotas, auditing, job lifecycle, tool publication, and inference validation.
-- Treat PostgreSQL as the source of truth, Redis as temporary coordination, the private Python worker as training-only, and ONNX artifacts as immutable versioned outputs.
+- Treat PostgreSQL as the source of truth and job queue, the private Python worker as training-only, and ONNX artifacts as immutable versioned outputs.
 - Maintain tenant isolation and enforce these lifecycles: `queued -> running -> succeeded|failed|cancelled|dead` and `candidate -> published -> retired`.
 - Only published models may be called. Out-of-range input must return a reasoned rejection, never a prediction.
 - Keep shared API, job, model, artifact, and tool contracts in `packages/contracts`; coordinate contract changes across API and worker boundaries.

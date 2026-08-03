@@ -1,0 +1,65 @@
+{
+  "table_name": "model_artifacts",
+  "add_base_columns": true,
+  "columns": [
+    {
+      "name": "model_version_id",
+      "type": "uuid",
+      "notNull": true,
+      "unique": true,
+      "references": {
+        "table": "model_versions",
+        "column": "id",
+        "onDelete": "restrict"
+      }
+    },
+    {
+      "name": "storage_uri",
+      "type": "text",
+      "notNull": true
+    },
+    {
+      "name": "format",
+      "type": "varchar",
+      "length": 16,
+      "notNull": true,
+      "enumValues": ["onnx"]
+    },
+    {
+      "name": "content_sha256",
+      "type": "char",
+      "length": 64,
+      "notNull": true,
+      "unique": true
+    },
+    {
+      "name": "size_bytes",
+      "type": "bigint",
+      "mode": "number",
+      "notNull": true
+    },
+    {
+      "name": "producer_worker_id",
+      "type": "varchar",
+      "length": 255,
+      "notNull": true
+    },
+    {
+      "name": "produced_at",
+      "type": "timestamptz",
+      "notNull": true
+    }
+  ],
+  "constraints": {
+    "check": [
+      {
+        "name": "ck_model_artifacts_format",
+        "expression": "format IN ('onnx')"
+      },
+      {
+        "name": "ck_model_artifacts_size_bytes_positive",
+        "expression": "size_bytes > 0"
+      }
+    ]
+  }
+}

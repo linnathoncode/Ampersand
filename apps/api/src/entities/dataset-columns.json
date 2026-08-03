@@ -1,0 +1,85 @@
+{
+  "table_name": "dataset_columns",
+  "add_base_columns": true,
+  "columns": [
+    {
+      "name": "dataset_definition_id",
+      "type": "uuid",
+      "notNull": true,
+      "references": {
+        "table": "dataset_definitions",
+        "column": "id",
+        "onDelete": "cascade"
+      }
+    },
+    {
+      "name": "column_name",
+      "type": "varchar",
+      "length": 255,
+      "notNull": true,
+      "sanitize": ["trim"]
+    },
+    {
+      "name": "role",
+      "type": "varchar",
+      "length": 16,
+      "notNull": true,
+      "enumValues": ["feature", "target", "time", "ignored"]
+    },
+    {
+      "name": "data_type",
+      "type": "varchar",
+      "length": 16,
+      "notNull": true,
+      "enumValues": ["number", "integer", "boolean", "category", "text", "datetime"]
+    },
+    {
+      "name": "description",
+      "type": "text",
+      "notNull": true,
+      "sanitize": ["trim"]
+    },
+    {
+      "name": "unit",
+      "type": "varchar",
+      "length": 100,
+      "sanitize": ["trim"]
+    },
+    {
+      "name": "is_nullable",
+      "type": "boolean",
+      "notNull": true
+    },
+    {
+      "name": "position",
+      "type": "integer",
+      "notNull": true,
+      "validation": {
+        "min": 0
+      }
+    }
+  ],
+  "indexes": [
+    {
+      "name": "uq_dataset_columns_definition_name",
+      "columns": ["dataset_definition_id", "column_name"],
+      "unique": true
+    }
+  ],
+  "constraints": {
+    "check": [
+      {
+        "name": "ck_dataset_columns_role",
+        "expression": "role IN ('feature', 'target', 'time', 'ignored')"
+      },
+      {
+        "name": "ck_dataset_columns_data_type",
+        "expression": "data_type IN ('number', 'integer', 'boolean', 'category', 'text', 'datetime')"
+      },
+      {
+        "name": "ck_dataset_columns_position_nonnegative",
+        "expression": "position >= 0"
+      }
+    ]
+  }
+}

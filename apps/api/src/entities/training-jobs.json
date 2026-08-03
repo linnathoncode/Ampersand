@@ -1,0 +1,96 @@
+{
+  "table_name": "training_jobs",
+  "add_base_columns": true,
+  "columns": [
+    {
+      "name": "dataset_snapshot_id",
+      "type": "uuid",
+      "notNull": true,
+      "references": {
+        "table": "dataset_snapshots",
+        "column": "id",
+        "onDelete": "restrict"
+      }
+    },
+    {
+      "name": "fingerprint",
+      "type": "char",
+      "length": 64,
+      "notNull": true,
+      "unique": true
+    },
+    {
+      "name": "status",
+      "type": "varchar",
+      "length": 16,
+      "notNull": true,
+      "enumValues": ["queued", "running", "succeeded", "failed", "cancelled", "dead"]
+    },
+    {
+      "name": "training_config",
+      "type": "jsonb",
+      "notNull": true
+    },
+    {
+      "name": "progress_percent",
+      "type": "integer",
+      "notNull": true
+    },
+    {
+      "name": "progress_message",
+      "type": "text"
+    },
+    {
+      "name": "claimed_by",
+      "type": "varchar",
+      "length": 255
+    },
+    {
+      "name": "queued_at",
+      "type": "timestamptz",
+      "notNull": true
+    },
+    {
+      "name": "started_at",
+      "type": "timestamptz"
+    },
+    {
+      "name": "heartbeat_at",
+      "type": "timestamptz"
+    },
+    {
+      "name": "finished_at",
+      "type": "timestamptz"
+    },
+    {
+      "name": "error_code",
+      "type": "varchar",
+      "length": 100
+    },
+    {
+      "name": "error_message",
+      "type": "text"
+    },
+    {
+      "name": "max_runtime_seconds",
+      "type": "integer",
+      "notNull": true
+    }
+  ],
+  "constraints": {
+    "check": [
+      {
+        "name": "ck_training_jobs_status",
+        "expression": "status IN ('queued', 'running', 'succeeded', 'failed', 'cancelled', 'dead')"
+      },
+      {
+        "name": "ck_training_jobs_progress_percent_range",
+        "expression": "progress_percent BETWEEN 0 AND 100"
+      },
+      {
+        "name": "ck_training_jobs_max_runtime_positive",
+        "expression": "max_runtime_seconds > 0"
+      }
+    ]
+  }
+}

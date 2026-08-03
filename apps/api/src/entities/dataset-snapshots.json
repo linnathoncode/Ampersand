@@ -1,0 +1,63 @@
+{
+  "table_name": "dataset_snapshots",
+  "add_base_columns": true,
+  "columns": [
+    {
+      "name": "dataset_definition_id",
+      "type": "uuid",
+      "notNull": true,
+      "references": {
+        "table": "dataset_definitions",
+        "column": "id",
+        "onDelete": "cascade"
+      }
+    },
+    {
+      "name": "storage_uri",
+      "type": "text",
+      "notNull": true
+    },
+    {
+      "name": "storage_format",
+      "type": "varchar",
+      "length": 16,
+      "notNull": true,
+      "enumValues": ["parquet"]
+    },
+    {
+      "name": "content_sha256",
+      "type": "char",
+      "length": 64,
+      "notNull": true,
+      "unique": true
+    },
+    {
+      "name": "row_count",
+      "type": "bigint",
+      "mode": "number",
+      "notNull": true
+    },
+    {
+      "name": "schema_summary",
+      "type": "jsonb",
+      "notNull": true
+    },
+    {
+      "name": "frozen_at",
+      "type": "timestamptz",
+      "notNull": true
+    }
+  ],
+  "constraints": {
+    "check": [
+      {
+        "name": "ck_dataset_snapshots_storage_format",
+        "expression": "storage_format IN ('parquet')"
+      },
+      {
+        "name": "ck_dataset_snapshots_row_count_positive",
+        "expression": "row_count > 0"
+      }
+    ]
+  }
+}

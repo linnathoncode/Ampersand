@@ -1,0 +1,89 @@
+{
+  "table_name": "model_versions",
+  "add_base_columns": true,
+  "columns": [
+    {
+      "name": "dataset_definition_id",
+      "type": "uuid",
+      "notNull": true,
+      "references": {
+        "table": "dataset_definitions",
+        "column": "id",
+        "onDelete": "restrict"
+      }
+    },
+    {
+      "name": "training_job_id",
+      "type": "uuid",
+      "notNull": true,
+      "unique": true,
+      "references": {
+        "table": "training_jobs",
+        "column": "id",
+        "onDelete": "restrict"
+      }
+    },
+    {
+      "name": "version_number",
+      "type": "integer",
+      "notNull": true
+    },
+    {
+      "name": "status",
+      "type": "varchar",
+      "length": 16,
+      "notNull": true,
+      "enumValues": ["candidate", "published", "retired"]
+    },
+    {
+      "name": "parent_version_id",
+      "type": "uuid",
+      "references": {
+        "table": "model_versions",
+        "column": "id",
+        "onDelete": "set null"
+      }
+    },
+    {
+      "name": "metrics",
+      "type": "jsonb",
+      "notNull": true
+    },
+    {
+      "name": "baseline_metrics",
+      "type": "jsonb",
+      "notNull": true
+    },
+    {
+      "name": "published_at",
+      "type": "timestamptz"
+    },
+    {
+      "name": "published_by",
+      "type": "uuid",
+      "references": {
+        "table": "users",
+        "column": "id",
+        "onDelete": "set null"
+      }
+    }
+  ],
+  "constraints": {
+    "unique": [
+      {
+        "name": "uq_model_versions_dataset_version",
+        "columns": ["dataset_definition_id", "version_number"]
+      }
+    ],
+    "check": [
+      {
+        "name": "ck_model_versions_version_number_positive",
+        "expression": "version_number > 0"
+      },
+      {
+        "name": "ck_model_versions_status",
+        "expression": "status IN ('candidate', 'published', 'retired')"
+      }
+    ]
+  }
+}

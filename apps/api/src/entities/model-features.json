@@ -1,0 +1,106 @@
+{
+  "table_name": "model_features",
+  "add_base_columns": true,
+  "columns": [
+    {
+      "name": "model_version_id",
+      "type": "uuid",
+      "notNull": true,
+      "references": {
+        "table": "model_versions",
+        "column": "id",
+        "onDelete": "cascade"
+      }
+    },
+    {
+      "name": "column_name",
+      "type": "varchar",
+      "length": 255,
+      "notNull": true,
+      "sanitize": ["trim"]
+    },
+    {
+      "name": "position",
+      "type": "integer",
+      "notNull": true,
+      "validation": {
+        "min": 0
+      }
+    },
+    {
+      "name": "data_type",
+      "type": "varchar",
+      "length": 16,
+      "notNull": true,
+      "enumValues": ["number", "integer", "boolean", "category"]
+    },
+    {
+      "name": "description",
+      "type": "text",
+      "notNull": true,
+      "sanitize": ["trim"]
+    },
+    {
+      "name": "unit",
+      "type": "varchar",
+      "length": 100,
+      "sanitize": ["trim"]
+    },
+    {
+      "name": "is_required",
+      "type": "boolean",
+      "notNull": true
+    },
+    {
+      "name": "valid_min",
+      "type": "numeric"
+    },
+    {
+      "name": "valid_max",
+      "type": "numeric"
+    },
+    {
+      "name": "allowed_values",
+      "type": "jsonb"
+    },
+    {
+      "name": "missing_rate",
+      "type": "numeric",
+      "notNull": true,
+      "validation": {
+        "min": 0,
+        "max": 1
+      }
+    }
+  ],
+  "constraints": {
+    "unique": [
+      {
+        "name": "uq_model_features_version_column",
+        "columns": ["model_version_id", "column_name"]
+      },
+      {
+        "name": "uq_model_features_version_position",
+        "columns": ["model_version_id", "position"]
+      }
+    ],
+    "check": [
+      {
+        "name": "ck_model_features_position_nonnegative",
+        "expression": "position >= 0"
+      },
+      {
+        "name": "ck_model_features_data_type",
+        "expression": "data_type IN ('number', 'integer', 'boolean', 'category')"
+      },
+      {
+        "name": "ck_model_features_missing_rate_range",
+        "expression": "missing_rate BETWEEN 0 AND 1"
+      },
+      {
+        "name": "ck_model_features_valid_range",
+        "expression": "valid_min IS NULL OR valid_max IS NULL OR valid_min <= valid_max"
+      }
+    ]
+  }
+}

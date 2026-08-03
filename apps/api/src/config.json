@@ -1,0 +1,788 @@
+{
+  "$schema": "../node_modules/nucleus-core-ts/schemas/config.nucleus.json",
+  "appId": "ampersand-api",
+  "mode": "development",
+  "database": {
+    "url": "DATABASE_URL",
+    "isMultiTenant": true
+  },
+  "authentication": {
+    "enabled": false
+  },
+  "entities": [
+    {
+      "table_name": "dataset_definitions",
+      "add_base_columns": true,
+      "columns": [
+        {
+          "name": "name",
+          "type": "varchar",
+          "length": 200,
+          "notNull": true,
+          "sanitize": [
+            "trim"
+          ]
+        },
+        {
+          "name": "source_schema",
+          "type": "varchar",
+          "length": 63,
+          "notNull": true,
+          "sanitize": [
+            "trim"
+          ]
+        },
+        {
+          "name": "source_table",
+          "type": "varchar",
+          "length": 63,
+          "notNull": true,
+          "sanitize": [
+            "trim"
+          ]
+        },
+        {
+          "name": "target_column",
+          "type": "varchar",
+          "length": 63,
+          "notNull": true,
+          "sanitize": [
+            "trim"
+          ]
+        },
+        {
+          "name": "time_column",
+          "type": "varchar",
+          "length": 63,
+          "sanitize": [
+            "trim"
+          ]
+        }
+      ]
+    },
+    {
+      "table_name": "dataset_columns",
+      "add_base_columns": true,
+      "columns": [
+        {
+          "name": "dataset_definition_id",
+          "type": "uuid",
+          "notNull": true,
+          "references": {
+            "table": "dataset_definitions",
+            "column": "id",
+            "onDelete": "cascade"
+          }
+        },
+        {
+          "name": "column_name",
+          "type": "varchar",
+          "length": 255,
+          "notNull": true,
+          "sanitize": [
+            "trim"
+          ]
+        },
+        {
+          "name": "role",
+          "type": "varchar",
+          "length": 16,
+          "notNull": true,
+          "enumValues": [
+            "feature",
+            "target",
+            "time",
+            "ignored"
+          ]
+        },
+        {
+          "name": "data_type",
+          "type": "varchar",
+          "length": 16,
+          "notNull": true,
+          "enumValues": [
+            "number",
+            "integer",
+            "boolean",
+            "category",
+            "text",
+            "datetime"
+          ]
+        },
+        {
+          "name": "description",
+          "type": "text",
+          "notNull": true,
+          "sanitize": [
+            "trim"
+          ]
+        },
+        {
+          "name": "unit",
+          "type": "varchar",
+          "length": 100,
+          "sanitize": [
+            "trim"
+          ]
+        },
+        {
+          "name": "is_nullable",
+          "type": "boolean",
+          "notNull": true
+        },
+        {
+          "name": "position",
+          "type": "integer",
+          "notNull": true,
+          "validation": {
+            "min": 0
+          }
+        }
+      ],
+      "indexes": [
+        {
+          "name": "uq_dataset_columns_definition_name",
+          "columns": [
+            "dataset_definition_id",
+            "column_name"
+          ],
+          "unique": true
+        }
+      ],
+      "constraints": {
+        "check": [
+          {
+            "name": "ck_dataset_columns_role",
+            "expression": "role IN ('feature', 'target', 'time', 'ignored')"
+          },
+          {
+            "name": "ck_dataset_columns_data_type",
+            "expression": "data_type IN ('number', 'integer', 'boolean', 'category', 'text', 'datetime')"
+          },
+          {
+            "name": "ck_dataset_columns_position_nonnegative",
+            "expression": "position >= 0"
+          }
+        ]
+      }
+    },
+    {
+      "table_name": "dataset_snapshots",
+      "add_base_columns": true,
+      "columns": [
+        {
+          "name": "dataset_definition_id",
+          "type": "uuid",
+          "notNull": true,
+          "references": {
+            "table": "dataset_definitions",
+            "column": "id",
+            "onDelete": "cascade"
+          }
+        },
+        {
+          "name": "storage_uri",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "storage_format",
+          "type": "varchar",
+          "length": 16,
+          "notNull": true,
+          "enumValues": [
+            "parquet"
+          ]
+        },
+        {
+          "name": "content_sha256",
+          "type": "char",
+          "length": 64,
+          "notNull": true,
+          "unique": true
+        },
+        {
+          "name": "row_count",
+          "type": "bigint",
+          "mode": "number",
+          "notNull": true
+        },
+        {
+          "name": "schema_summary",
+          "type": "jsonb",
+          "notNull": true
+        },
+        {
+          "name": "frozen_at",
+          "type": "timestamptz",
+          "notNull": true
+        }
+      ],
+      "constraints": {
+        "check": [
+          {
+            "name": "ck_dataset_snapshots_storage_format",
+            "expression": "storage_format IN ('parquet')"
+          },
+          {
+            "name": "ck_dataset_snapshots_row_count_positive",
+            "expression": "row_count > 0"
+          }
+        ]
+      }
+    },
+    {
+      "table_name": "training_jobs",
+      "add_base_columns": true,
+      "columns": [
+        {
+          "name": "dataset_snapshot_id",
+          "type": "uuid",
+          "notNull": true,
+          "references": {
+            "table": "dataset_snapshots",
+            "column": "id",
+            "onDelete": "restrict"
+          }
+        },
+        {
+          "name": "fingerprint",
+          "type": "char",
+          "length": 64,
+          "notNull": true,
+          "unique": true
+        },
+        {
+          "name": "status",
+          "type": "varchar",
+          "length": 16,
+          "notNull": true,
+          "enumValues": [
+            "queued",
+            "running",
+            "succeeded",
+            "failed",
+            "cancelled",
+            "dead"
+          ]
+        },
+        {
+          "name": "training_config",
+          "type": "jsonb",
+          "notNull": true
+        },
+        {
+          "name": "progress_percent",
+          "type": "integer",
+          "notNull": true
+        },
+        {
+          "name": "progress_message",
+          "type": "text"
+        },
+        {
+          "name": "claimed_by",
+          "type": "varchar",
+          "length": 255
+        },
+        {
+          "name": "queued_at",
+          "type": "timestamptz",
+          "notNull": true
+        },
+        {
+          "name": "started_at",
+          "type": "timestamptz"
+        },
+        {
+          "name": "heartbeat_at",
+          "type": "timestamptz"
+        },
+        {
+          "name": "finished_at",
+          "type": "timestamptz"
+        },
+        {
+          "name": "error_code",
+          "type": "varchar",
+          "length": 100
+        },
+        {
+          "name": "error_message",
+          "type": "text"
+        },
+        {
+          "name": "max_runtime_seconds",
+          "type": "integer",
+          "notNull": true
+        }
+      ],
+      "constraints": {
+        "check": [
+          {
+            "name": "ck_training_jobs_status",
+            "expression": "status IN ('queued', 'running', 'succeeded', 'failed', 'cancelled', 'dead')"
+          },
+          {
+            "name": "ck_training_jobs_progress_percent_range",
+            "expression": "progress_percent BETWEEN 0 AND 100"
+          },
+          {
+            "name": "ck_training_jobs_max_runtime_positive",
+            "expression": "max_runtime_seconds > 0"
+          }
+        ]
+      }
+    },
+    {
+      "table_name": "model_versions",
+      "add_base_columns": true,
+      "columns": [
+        {
+          "name": "dataset_definition_id",
+          "type": "uuid",
+          "notNull": true,
+          "references": {
+            "table": "dataset_definitions",
+            "column": "id",
+            "onDelete": "restrict"
+          }
+        },
+        {
+          "name": "training_job_id",
+          "type": "uuid",
+          "notNull": true,
+          "unique": true,
+          "references": {
+            "table": "training_jobs",
+            "column": "id",
+            "onDelete": "restrict"
+          }
+        },
+        {
+          "name": "version_number",
+          "type": "integer",
+          "notNull": true
+        },
+        {
+          "name": "status",
+          "type": "varchar",
+          "length": 16,
+          "notNull": true,
+          "enumValues": [
+            "candidate",
+            "published",
+            "retired"
+          ]
+        },
+        {
+          "name": "parent_version_id",
+          "type": "uuid",
+          "references": {
+            "table": "model_versions",
+            "column": "id",
+            "onDelete": "set null"
+          }
+        },
+        {
+          "name": "metrics",
+          "type": "jsonb",
+          "notNull": true
+        },
+        {
+          "name": "baseline_metrics",
+          "type": "jsonb",
+          "notNull": true
+        },
+        {
+          "name": "published_at",
+          "type": "timestamptz"
+        },
+        {
+          "name": "published_by",
+          "type": "uuid",
+          "references": {
+            "table": "users",
+            "column": "id",
+            "onDelete": "set null"
+          }
+        }
+      ],
+      "constraints": {
+        "unique": [
+          {
+            "name": "uq_model_versions_dataset_version",
+            "columns": [
+              "dataset_definition_id",
+              "version_number"
+            ]
+          }
+        ],
+        "check": [
+          {
+            "name": "ck_model_versions_version_number_positive",
+            "expression": "version_number > 0"
+          },
+          {
+            "name": "ck_model_versions_status",
+            "expression": "status IN ('candidate', 'published', 'retired')"
+          }
+        ]
+      }
+    },
+    {
+      "table_name": "model_artifacts",
+      "add_base_columns": true,
+      "columns": [
+        {
+          "name": "model_version_id",
+          "type": "uuid",
+          "notNull": true,
+          "unique": true,
+          "references": {
+            "table": "model_versions",
+            "column": "id",
+            "onDelete": "restrict"
+          }
+        },
+        {
+          "name": "storage_uri",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "format",
+          "type": "varchar",
+          "length": 16,
+          "notNull": true,
+          "enumValues": [
+            "onnx"
+          ]
+        },
+        {
+          "name": "content_sha256",
+          "type": "char",
+          "length": 64,
+          "notNull": true,
+          "unique": true
+        },
+        {
+          "name": "size_bytes",
+          "type": "bigint",
+          "mode": "number",
+          "notNull": true
+        },
+        {
+          "name": "producer_worker_id",
+          "type": "varchar",
+          "length": 255,
+          "notNull": true
+        },
+        {
+          "name": "produced_at",
+          "type": "timestamptz",
+          "notNull": true
+        }
+      ],
+      "constraints": {
+        "check": [
+          {
+            "name": "ck_model_artifacts_format",
+            "expression": "format IN ('onnx')"
+          },
+          {
+            "name": "ck_model_artifacts_size_bytes_positive",
+            "expression": "size_bytes > 0"
+          }
+        ]
+      }
+    },
+    {
+      "table_name": "model_features",
+      "add_base_columns": true,
+      "columns": [
+        {
+          "name": "model_version_id",
+          "type": "uuid",
+          "notNull": true,
+          "references": {
+            "table": "model_versions",
+            "column": "id",
+            "onDelete": "cascade"
+          }
+        },
+        {
+          "name": "column_name",
+          "type": "varchar",
+          "length": 255,
+          "notNull": true,
+          "sanitize": [
+            "trim"
+          ]
+        },
+        {
+          "name": "position",
+          "type": "integer",
+          "notNull": true,
+          "validation": {
+            "min": 0
+          }
+        },
+        {
+          "name": "data_type",
+          "type": "varchar",
+          "length": 16,
+          "notNull": true,
+          "enumValues": [
+            "number",
+            "integer",
+            "boolean",
+            "category"
+          ]
+        },
+        {
+          "name": "description",
+          "type": "text",
+          "notNull": true,
+          "sanitize": [
+            "trim"
+          ]
+        },
+        {
+          "name": "unit",
+          "type": "varchar",
+          "length": 100,
+          "sanitize": [
+            "trim"
+          ]
+        },
+        {
+          "name": "is_required",
+          "type": "boolean",
+          "notNull": true
+        },
+        {
+          "name": "valid_min",
+          "type": "numeric"
+        },
+        {
+          "name": "valid_max",
+          "type": "numeric"
+        },
+        {
+          "name": "allowed_values",
+          "type": "jsonb"
+        },
+        {
+          "name": "missing_rate",
+          "type": "numeric",
+          "notNull": true,
+          "validation": {
+            "min": 0,
+            "max": 1
+          }
+        }
+      ],
+      "constraints": {
+        "unique": [
+          {
+            "name": "uq_model_features_version_column",
+            "columns": [
+              "model_version_id",
+              "column_name"
+            ]
+          },
+          {
+            "name": "uq_model_features_version_position",
+            "columns": [
+              "model_version_id",
+              "position"
+            ]
+          }
+        ],
+        "check": [
+          {
+            "name": "ck_model_features_position_nonnegative",
+            "expression": "position >= 0"
+          },
+          {
+            "name": "ck_model_features_data_type",
+            "expression": "data_type IN ('number', 'integer', 'boolean', 'category')"
+          },
+          {
+            "name": "ck_model_features_missing_rate_range",
+            "expression": "missing_rate BETWEEN 0 AND 1"
+          },
+          {
+            "name": "ck_model_features_valid_range",
+            "expression": "valid_min IS NULL OR valid_max IS NULL OR valid_min <= valid_max"
+          }
+        ]
+      }
+    },
+    {
+      "table_name": "tool_definitions",
+      "add_base_columns": true,
+      "columns": [
+        {
+          "name": "model_version_id",
+          "type": "uuid",
+          "notNull": true,
+          "unique": true,
+          "references": {
+            "table": "model_versions",
+            "column": "id",
+            "onDelete": "restrict"
+          }
+        },
+        {
+          "name": "tool_name",
+          "type": "varchar",
+          "length": 255,
+          "notNull": true,
+          "unique": true,
+          "sanitize": [
+            "trim"
+          ]
+        },
+        {
+          "name": "description",
+          "type": "text",
+          "notNull": true,
+          "sanitize": [
+            "trim"
+          ]
+        },
+        {
+          "name": "input_schema",
+          "type": "jsonb",
+          "notNull": true
+        },
+        {
+          "name": "output_schema",
+          "type": "jsonb",
+          "notNull": true
+        },
+        {
+          "name": "generator_version",
+          "type": "varchar",
+          "length": 50,
+          "notNull": true
+        },
+        {
+          "name": "schema_sha256",
+          "type": "char",
+          "length": 64,
+          "notNull": true,
+          "unique": true
+        },
+        {
+          "name": "generated_at",
+          "type": "timestamptz",
+          "notNull": true
+        }
+      ]
+    },
+    {
+      "table_name": "inference_calls",
+      "add_base_columns": true,
+      "columns": [
+        {
+          "name": "tool_definition_id",
+          "type": "uuid",
+          "notNull": true,
+          "references": {
+            "table": "tool_definitions",
+            "column": "id",
+            "onDelete": "restrict"
+          }
+        },
+        {
+          "name": "model_version_id",
+          "type": "uuid",
+          "notNull": true,
+          "references": {
+            "table": "model_versions",
+            "column": "id",
+            "onDelete": "restrict"
+          }
+        },
+        {
+          "name": "conversation_id",
+          "type": "varchar",
+          "length": 255
+        },
+        {
+          "name": "input_payload",
+          "type": "jsonb",
+          "notNull": true
+        },
+        {
+          "name": "outcome",
+          "type": "varchar",
+          "length": 16,
+          "notNull": true,
+          "enumValues": [
+            "prediction",
+            "rejected",
+            "error"
+          ]
+        },
+        {
+          "name": "prediction",
+          "type": "numeric"
+        },
+        {
+          "name": "uncertainty",
+          "type": "numeric"
+        },
+        {
+          "name": "warnings",
+          "type": "jsonb",
+          "notNull": true
+        },
+        {
+          "name": "rejection_code",
+          "type": "varchar",
+          "length": 100
+        },
+        {
+          "name": "rejection_message",
+          "type": "text"
+        },
+        {
+          "name": "latency_ms",
+          "type": "integer",
+          "notNull": true,
+          "validation": {
+            "min": 0
+          }
+        }
+      ],
+      "constraints": {
+        "check": [
+          {
+            "name": "ck_inference_calls_outcome",
+            "expression": "outcome IN ('prediction', 'rejected', 'error')"
+          },
+          {
+            "name": "ck_inference_calls_latency_nonnegative",
+            "expression": "latency_ms >= 0"
+          },
+          {
+            "name": "ck_inference_calls_prediction_result",
+            "expression": "outcome <> 'prediction' OR prediction IS NOT NULL"
+          },
+          {
+            "name": "ck_inference_calls_rejected_result",
+            "expression": "outcome <> 'rejected' OR (prediction IS NULL AND rejection_code IS NOT NULL AND rejection_message IS NOT NULL)"
+          },
+          {
+            "name": "ck_inference_calls_error_result",
+            "expression": "outcome <> 'error' OR prediction IS NULL"
+          }
+        ]
+      }
+    }
+  ]
+}

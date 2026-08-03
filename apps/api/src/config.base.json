@@ -1,0 +1,12 @@
+{
+  "$schema": "../node_modules/nucleus-core-ts/schemas/config.nucleus.json",
+  "appId": "ampersand-api",
+  "mode": "development",
+  "database": {
+    "url": "DATABASE_URL",
+    "isMultiTenant": true
+  },
+  "authentication": {
+    "enabled": false
+  }
+}

@@ -1,0 +1,97 @@
+{
+  "table_name": "inference_calls",
+  "add_base_columns": true,
+  "columns": [
+    {
+      "name": "tool_definition_id",
+      "type": "uuid",
+      "notNull": true,
+      "references": {
+        "table": "tool_definitions",
+        "column": "id",
+        "onDelete": "restrict"
+      }
+    },
+    {
+      "name": "model_version_id",
+      "type": "uuid",
+      "notNull": true,
+      "references": {
+        "table": "model_versions",
+        "column": "id",
+        "onDelete": "restrict"
+      }
+    },
+    {
+      "name": "conversation_id",
+      "type": "varchar",
+      "length": 255
+    },
+    {
+      "name": "input_payload",
+      "type": "jsonb",
+      "notNull": true
+    },
+    {
+      "name": "outcome",
+      "type": "varchar",
+      "length": 16,
+      "notNull": true,
+      "enumValues": ["prediction", "rejected", "error"]
+    },
+    {
+      "name": "prediction",
+      "type": "numeric"
+    },
+    {
+      "name": "uncertainty",
+      "type": "numeric"
+    },
+    {
+      "name": "warnings",
+      "type": "jsonb",
+      "notNull": true
+    },
+    {
+      "name": "rejection_code",
+      "type": "varchar",
+      "length": 100
+    },
+    {
+      "name": "rejection_message",
+      "type": "text"
+    },
+    {
+      "name": "latency_ms",
+      "type": "integer",
+      "notNull": true,
+      "validation": {
+        "min": 0
+      }
+    }
+  ],
+  "constraints": {
+    "check": [
+      {
+        "name": "ck_inference_calls_outcome",
+        "expression": "outcome IN ('prediction', 'rejected', 'error')"
+      },
+      {
+        "name": "ck_inference_calls_latency_nonnegative",
+        "expression": "latency_ms >= 0"
+      },
+      {
+        "name": "ck_inference_calls_prediction_result",
+        "expression": "outcome <> 'prediction' OR prediction IS NOT NULL"
+      },
+      {
+        "name": "ck_inference_calls_rejected_result",
+        "expression": "outcome <> 'rejected' OR (prediction IS NULL AND rejection_code IS NOT NULL AND rejection_message IS NOT NULL)"
+      },
+      {
+        "name": "ck_inference_calls_error_result",
+        "expression": "outcome <> 'error' OR prediction IS NULL"
+      }
+    ]
+  }
+}

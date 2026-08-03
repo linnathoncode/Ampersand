@@ -1,0 +1,40 @@
+{
+  "table_name": "dataset_definitions",
+  "add_base_columns": true,
+  "columns": [
+    {
+      "name": "name",
+      "type": "varchar",
+      "length": 200,
+      "notNull": true,
+      "sanitize": ["trim"]
+    },
+    {
+      "name": "source_schema",
+      "type": "varchar",
+      "length": 63,
+      "notNull": true,
+      "sanitize": ["trim"]
+    },
+    {
+      "name": "source_table",
+      "type": "varchar",
+      "length": 63,
+      "notNull": true,
+      "sanitize": ["trim"]
+    },
+    {
+      "name": "target_column",
+      "type": "varchar",
+      "length": 63,
+      "notNull": true,
+      "sanitize": ["trim"]
+    },
+    {
+      "name": "time_column",
+      "type": "varchar",
+      "length": 63,
+      "sanitize": ["trim"]
+    }
+  ]
+}

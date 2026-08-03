@@ -14,14 +14,15 @@
 │ Auth · tenants · quotas · audit         │
 │ Jobs · registry · tool generation       │
 │ Inference validation                    │
-└──────────┬─────────────────┬────────────┘
-           │                 │
-           ▼                 ▼
-┌──────────────────┐   ┌───────────────┐
-│ PostgreSQL       │   │ Redis Queue   │
-│ Source of truth  │   └───────┬───────┘
-└──────────────────┘           │
-                               ▼
+└────────────────────┬────────────────────┘
+                     │
+                     ▼
+          ┌──────────────────────┐
+          │ PostgreSQL           │
+          │ Truth + job queue    │
+          └──────────┬───────────┘
+                     │ Transactional claim
+                     ▼
                     ┌────────────────────┐
                     │ Private ML Worker  │
                     │ Train · evaluate   │
@@ -46,11 +47,7 @@ Nucleus is the only public gateway. Custom Elysia routes implement training comm
 
 ### PostgreSQL
 
-PostgreSQL is the single source of truth for datasets, snapshots, training jobs, model versions, feature metadata, artifact manifests, tool definitions, and inference records.
-
-### Redis
-
-Redis carries training jobs and supports temporary coordination. Durable job and model state remains in PostgreSQL.
+PostgreSQL is the single source of truth for datasets, snapshots, training jobs, model versions, feature metadata, artifact manifests, tool definitions, and inference records. It also provides the job queue: workers poll and claim queued rows transactionally with `FOR UPDATE SKIP LOCKED`.
 
 ### Worker
 
@@ -89,4 +86,3 @@ candidate → published → retired
 ```
 
 Only published versions may be called.
-
