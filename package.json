@@ -8,6 +8,9 @@
     "packages/*"
   ],
   "scripts": {
+    "infra:up": "docker compose up -d",
+    "infra:down": "docker compose down",
+    "infra:logs": "docker compose logs -f",
     "dev:api": "bun --cwd apps/api dev",
     "dev:web": "bun --cwd apps/web dev",
     "build": "bun run --filter '*' build",

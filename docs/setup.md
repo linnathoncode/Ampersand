@@ -30,9 +30,20 @@ This installs the root, API, web, and shared-contract packages and creates the B
 ## Python Worker Environment
 
 ```powershell
-cd services/worker
 python -m venv .venv
-.\.venv\Scripts\Activate.ps1
+. .\scripts\activate-env.ps1
 python -m pip install --upgrade pip
-pip install -r requirements.txt
+pip install -r services\worker\requirements.txt
 ```
+
+The activation helper searches the current directory and its parents for `.venv`, so it also works from a subdirectory of the repository.
+
+## Local Infrastructure
+
+Start PostgreSQL and Redis in Docker:
+
+```powershell
+bun run infra:up
+```
+
+Database rows persist in named Docker volumes when containers are stopped. Use `bun run infra:down` to stop the services without deleting their data.
