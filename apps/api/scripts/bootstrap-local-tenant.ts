@@ -1,0 +1,80 @@
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
+import pg from "pg";
+
+const { Pool } = pg;
+
+const databaseUrl = requiredEnv("DATABASE_URL");
+const nucleusUrl = process.env.NUCLEUS_URL ?? "http://localhost:4000";
+const subdomain = process.env.DEV_TENANT_SUBDOMAIN ?? "ampersand-dev";
+const email = requiredEnv("DEV_TENANT_ADMIN_EMAIL");
+const password = requiredEnv("DEV_TENANT_ADMIN_PASSWORD");
+const pool = new Pool({ connectionString: databaseUrl });
+
+try {
+  let tenant = await findTenant(subdomain);
+
+  if (!tenant) {
+    const response = await fetch(`${nucleusUrl}/tenants/self-signup`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        email,
+        password,
+        subdomain,
+        plan: "development",
+        companyName: "Ampersand Development",
+      }),
+    });
+    const body = await response.json();
+
+    if (!response.ok || !body.success) {
+      throw new Error(`Nucleus tenant provisioning failed: ${JSON.stringify(body)}`);
+    }
+
+    tenant = await findTenant(subdomain);
+  }
+
+  if (!tenant) throw new Error("Nucleus did not register the provisioned tenant");
+  assertIdentifier(tenant.schema_name);
+
+  const migrationPath = join(import.meta.dir, "..", "migrations", "0001_ampersand_constraints.sql");
+  const migration = await readFile(migrationPath, "utf8");
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+    await client.query(`SET LOCAL search_path TO "${tenant.schema_name}"`);
+    await client.query(migration);
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+
+  console.log(`Tenant ${subdomain} is ready in schema ${tenant.schema_name}`);
+} finally {
+  await pool.end();
+}
+
+async function findTenant(tenantSubdomain: string): Promise<{ schema_name: string } | null> {
+  const result = await pool.query<{ schema_name: string }>(
+    "SELECT schema_name FROM main.tenants WHERE subdomain = $1 AND status = 'active'",
+    [tenantSubdomain],
+  );
+  return result.rows[0] ?? null;
+}
+
+function requiredEnv(name: string): string {
+  const value = process.env[name];
+  if (!value) throw new Error(`${name} is required`);
+  return value;
+}
+
+function assertIdentifier(value: string): void {
+  if (!/^[a-z_][a-z0-9_]*$/.test(value)) {
+    throw new Error(`Unsafe PostgreSQL schema identifier: ${value}`);
+  }
+}

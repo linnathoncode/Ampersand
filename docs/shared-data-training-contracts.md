@@ -2,7 +2,7 @@
 
 ## Purpose and ownership
 
-This document defines the shared boundary between Ampersand's Nucleus service and private training worker. The TypeBox schemas in `packages/contracts/src` are the source of truth.
+This document defines the shared boundary between Ampersand's frontend, Nucleus service, and private training worker. The TypeBox schemas in `packages/contracts/src` are the source of truth.
 
 - Member B owns request validation, authorization, snapshot orchestration, queue creation, job lifecycle, and API responses through Nucleus.
 - Member A owns dataset freezing and training behavior behind the agreed contracts.
@@ -27,8 +27,11 @@ flowchart TD
     K --> L[Worker claims job]
     L --> M[TrainingWorkerInputDto]
     M --> N[Train with resolved configuration]
-    N --> O[Worker result contract]
-    O -. not yet defined .-> P[Candidate model registration]
+    N --> O[TrainingWorkerResultDto]
+    O --> P[Candidate model registration or job failure]
+    P --> Q[GeneratedToolDefinitionDto]
+    Q --> R[PredictionRequestDto]
+    R --> S[PredictionResponseDto]
 ```
 
 ## Dataset-definition contract
@@ -310,6 +313,25 @@ Lifecycle writes must be conditional on the current state. Worker progress, hear
 | `TrainingWorkerTargetDto` | Numeric worker target |
 | `TrainingWorkerSnapshotDto` | Verified Parquet snapshot reference |
 | `TrainingWorkerInputDto` | Complete immutable worker input |
+| `TrainingWorkerMetricsDto` | Model or baseline regression metrics |
+| `TrainingWorkerArtifactDto` | Produced ONNX artifact metadata |
+| `TrainingWorkerModelFeatureDto` | Frozen feature bounds and categories |
+| `TrainingWorkerSuccessDto` | Successful training result |
+| `TrainingWorkerFailureDto` | Structured training failure |
+| `TrainingWorkerResultDto` | Complete worker-to-Nucleus result |
+| `ToolPropertyTypeDto` | JSON Schema types supported by generated feature properties |
+| `ToolInputPropertyDto` | Generated JSON Schema property for one model feature |
+| `ToolInputSchemaDto` | Generated tool input JSON Schema |
+| `ToolOutputSchemaDto` | Generated tool output JSON Schema |
+| `GeneratedToolDefinitionDto` | Nucleus-generated definition for a published model tool |
+| `PredictionInputValueDto` | Scalar value accepted in prediction inputs |
+| `PredictionRequestDto` | Prediction tool invocation request |
+| `PredictionRejectionCodeDto` | Stable input-rejection reason codes |
+| `PredictionRejectionFieldDto` | Field-level rejection detail |
+| `PredictionRejectionDto` | Structured reasoned rejection |
+| `PredictionSuccessResponseDto` | Successful numerical prediction response |
+| `PredictionRejectedResponseDto` | Rejected-input response without a prediction |
+| `PredictionResponseDto` | Discriminated prediction or rejection response |
 | `TRAINING_JOB_TRANSITIONS` | Allowed state transitions |
 | `TERMINAL_TRAINING_JOB_STATUSES` | Immutable terminal states |
 | `TRAINING_JOB_TRANSITION_OWNERS` | Nucleus or worker transition ownership |
@@ -326,7 +348,53 @@ Lifecycle writes must be conditional on the current state. Worker progress, hear
 - Training configuration is resolved by the server and includes a fixed trainer version, random seed, chronological split, test fraction, and runtime bound.
 - Only the private worker receives `TrainingWorkerInputDto`; no public route exposes worker control.
 - Conditional lifecycle updates prevent stale workers from overwriting cancellation or dead-job decisions.
+- Users and workers cannot provide tool schemas; Nucleus generates them from a published model and its frozen features.
+- Nucleus resolves the published model version for a tool call instead of accepting a caller-selected version.
+- Invalid or out-of-range inference input produces a reasoned rejection and never a numerical prediction.
 
-## Remaining contract
+## Worker result
 
-`TrainingWorkerResultDto` is not yet defined or exported. Step 2 is not complete until the success and failure result boundary specifies model metrics, baseline metrics, ONNX artifact metadata, model-feature bounds, and structured training failure details. This document intentionally does not define those fields before the shared contract is agreed.
+`TrainingWorkerResultDto` is the worker-to-Nucleus boundary after a training attempt. Every result identifies the job, exact training fingerprint, and claiming worker.
+
+A successful `result` uses `TrainingWorkerSuccessDto` with the literal status `succeeded`. It contains model and baseline MAE, RMSE, and R-squared metrics through `TrainingWorkerMetricsDto`; ONNX URI, lowercase SHA-256 digest, and positive file size through `TrainingWorkerArtifactDto`; and at least one ordered `TrainingWorkerModelFeatureDto`. Each model feature records its data type, nullable numeric bounds, nullable allowed values, and a missing rate from 0 through 1. Nucleus uses these fields to register the candidate model, artifact, and frozen model-feature contract.
+
+A failed `result` uses `TrainingWorkerFailureDto` with the literal status `failed` and contains a non-empty machine-readable error code and human-readable message. The success and failure shapes are mutually exclusive and reject additional properties. Nucleus verifies the UUID, 64-character lowercase fingerprint, and worker ownership before accepting either result so stale or unrelated workers cannot complete the job.
+
+## Generated tool definition
+
+`GeneratedToolDefinitionDto` is created by Nucleus when a model version is published. It identifies the model version, tool name, description, and generator version, and contains the JSON Schemas used to advertise and validate the tool.
+
+`ToolInputSchemaDto` is an object schema composed of `ToolInputPropertyDto` entries. Supported property types are `number`, `integer`, `boolean`, and `string`. Numeric properties may include minimum and maximum values, while categorical properties may include a non-empty list of allowed string or numeric values. Required property names must be unique, and every generated input schema rejects additional properties.
+
+`ToolOutputSchemaDto` advertises the complete output object and requires `outcome`, `prediction`, `uncertainty`, `modelVersion`, `warnings`, and `rejection`. It describes both possible outcomes: a numerical prediction or a reasoned rejection.
+
+Neither users nor the training worker provide this DTO. Nucleus generates and stores it from the published model version, model features, and dataset descriptions.
+
+## Prediction contract
+
+`PredictionRequestDto` contains the tool name, an optional non-empty conversation identifier, and feature inputs whose values are limited to strings, numbers, or booleans. It rejects additional request fields and does not accept a model version. Nucleus resolves the version currently published for the requested tool, checks authorization and quota, and validates the inputs against the stored tool definition before inference.
+
+`PredictionResponseDto` is discriminated by `outcome`:
+
+- `prediction` includes a numerical prediction, optional uncertainty, exact model version ID and number, warnings, and a null rejection.
+- `rejected` includes no prediction or uncertainty. It identifies the exact resolved model version and supplies a structured rejection with field-level details.
+
+`PredictionSuccessResponseDto` requires `outcome: "prediction"`, a numerical prediction, non-negative or null uncertainty, exact model version information, warnings, and a null rejection. `PredictionRejectedResponseDto` requires `outcome: "rejected"`, null prediction and uncertainty, exact model version information, warnings, and `PredictionRejectionDto`. `PredictionResponseDto` is the union of these two mutually consistent branches.
+
+`PredictionRejectionCodeDto` allows `OUT_OF_RANGE`, `INVALID_TYPE`, `MISSING_FEATURE`, `UNKNOWN_FEATURE`, and `VALUE_NOT_ALLOWED`. Each rejection contains a summary and at least one `PredictionRejectionFieldDto` naming the affected input and explaining the problem. Nucleus records both successful and rejected calls in `inference_calls`.
+
+## Runtime contract validation
+
+Runtime validation tests are in `packages/contracts/src/contracts.test.ts`. They use TypeBox's runtime `Value.Check` validator and cover valid and invalid payloads across the dataset, training-job, worker-input, worker-result, generated-tool, and prediction contracts.
+
+The tests specifically verify UUID and date-time formats, PostgreSQL identifiers, lowercase SHA-256 digests, numeric limits, unique required fields, rejection of additional properties, and consistency of the worker success/failure and prediction/rejection branches. Run them from the repository root with:
+
+```text
+bun --cwd packages/contracts test
+```
+
+Run static TypeScript validation separately with:
+
+```text
+bun --cwd packages/contracts typecheck
+```

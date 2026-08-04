@@ -7,7 +7,38 @@
     "isMultiTenant": true
   },
   "authentication": {
-    "enabled": false
+    "enabled": true,
+    "mode": "full",
+    "defaultRole": "basic",
+    "accessToken": {
+      "secret": "ACCESS_TOKEN_SECRET",
+      "expiresIn": "15m"
+    },
+    "refreshToken": {
+      "secret": "REFRESH_TOKEN_SECRET",
+      "expiresIn": "30d"
+    },
+    "sessionToken": {
+      "secret": "SESSION_TOKEN_SECRET"
+    },
+    "login": {
+      "enabled": true
+    },
+    "register": {
+      "enabled": false
+    },
+    "logout": {
+      "enabled": true
+    },
+    "refresh": {
+      "enabled": true
+    }
+  },
+  "authorization": {
+    "enabled": true,
+    "autoSeedClaims": false,
+    "godminEmail": "GODMIN_EMAIL",
+    "godminPassword": "GODMIN_PASSWORD"
   },
   "entities": [
     {

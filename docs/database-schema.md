@@ -1,5 +1,25 @@
 # PostgreSQL Schema
 
+## Local tenant bootstrap
+
+Nucleus owns tenant provisioning. For local development, start PostgreSQL and the
+Nucleus API, then run:
+
+```powershell
+bun run --cwd apps/api tenant:bootstrap
+```
+
+The command calls Nucleus tenant self-signup when `ampersand-dev` does not exist.
+Nucleus creates the `main.tenants` record, `tenant_ampersand_dev` schema, tenant
+admin, system tables, and project tables. The command then applies
+`apps/api/migrations/0001_ampersand_constraints.sql` with the tenant schema first
+on `search_path`. Re-running it is safe because both provisioning lookup and the
+migration constraints are idempotent.
+
+The local tenant values are configured by `NUCLEUS_URL`,
+`DEV_TENANT_SUBDOMAIN`, `DEV_TENANT_ADMIN_EMAIL`, and
+`DEV_TENANT_ADMIN_PASSWORD`.
+
 ## Purpose and scope
 
 PostgreSQL is Ampersand's source of truth for dataset metadata, training-job state, model versions, generated tool contracts, and inference records. It also provides the training queue. The large immutable files referenced by these records are stored outside PostgreSQL: frozen datasets use Parquet and trained models use ONNX.
@@ -12,7 +32,7 @@ Nucleus uses a schema-per-tenant design. It resolves the authenticated request t
 
 ```text
 PostgreSQL database
-├── public                  Nucleus tenant registry and platform data
+├── main                    Nucleus tenant registry and platform data
 ├── tenant_a               Nucleus and Ampersand tenant tables
 └── tenant_b               Separate Nucleus and Ampersand tenant tables
 ```
@@ -285,3 +305,14 @@ The manual migration must add:
    - `tool_definitions.model_version_id`
 
 These are generator limitations, not optional application rules. Until the migration is applied, application validation alone does not provide equivalent concurrency-safe enforcement.
+
+The idempotent migration is stored at `apps/api/migrations/0001_ampersand_constraints.sql`. It adds all 21 declared checks, the three composite unique keys, the three tenant-schema one-to-one unique keys, and the two missing foreign keys.
+
+Nucleus must apply the migration once after creating the generated tables in each tenant schema. Set that tenant schema first on `search_path`, then execute the file in the same session. For example, in `psql`:
+
+```sql
+SET search_path TO tenant_schema, public;
+\i apps/api/migrations/0001_ampersand_constraints.sql
+```
+
+The migration resolves unqualified table names against the active tenant schema and can safely be run again. PostgreSQL validates existing rows while adding the checks, foreign keys, and unique constraints, so invalid or duplicate existing data must be corrected before the migration can complete.
