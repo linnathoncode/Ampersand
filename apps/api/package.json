@@ -8,6 +8,9 @@
     "config:validate": "bun run config:build && bunx nucleus-core-ts validate src/config.json",
     "schema:generate": "bun run config:build && bunx nucleus-core-ts generate src/config.json src/drizzle",
     "tenant:bootstrap": "bun --env-file=../../.env scripts/bootstrap-local-tenant.ts",
+    "mock:training-job": "bun --env-file=../../.env scripts/mock-training-job.ts",
+    "mock:training-failure": "bun --env-file=../../.env scripts/mock-training-failure.ts",
+    "mock:tool-prediction": "bun --env-file=../../.env scripts/mock-tool-prediction.ts",
     "dev": "bun --env-file=../../.env --watch src/index.ts",
     "start": "bun --env-file=../../.env src/index.ts",
     "typecheck": "tsc --noEmit"
