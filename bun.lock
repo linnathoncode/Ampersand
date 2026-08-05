@@ -5,8 +5,12 @@
     "": {
       "name": "ampersand",
       "devDependencies": {
+        "@ampersand/contracts": "workspace:*",
         "@playwright/test": "1.62.1",
+        "@sinclair/typebox": "0.34.52",
         "@types/bun": "1.3.14",
+        "@types/pg": "8.20.0",
+        "pg": "8.22.0",
         "typescript": "7.0.2",
         "vitest": "4.1.0",
       },
