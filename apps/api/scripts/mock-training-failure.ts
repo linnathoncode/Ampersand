@@ -1,3 +1,3 @@
-process.env.MOCK_TRAINING_OUTCOME = "failed";
+import { runMockTraining } from "./mock-training-job";
 
-await import("./mock-training-job");
+await runMockTraining("failed");
