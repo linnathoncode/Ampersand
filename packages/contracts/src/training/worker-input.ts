@@ -1,7 +1,7 @@
 import { Type, type Static } from "@sinclair/typebox";
 
-import { PostgreSqlIdentifierSchema } from "./dataset-definition";
-import { ResolvedTrainingConfigDto } from "./training-job";
+import { PostgreSqlIdentifierSchema } from "../dataset/definition";
+import { ResolvedTrainingConfigDto } from "./job";
 
 export const TrainingWorkerFeatureDataTypeDto = Type.Union([
   Type.Literal("number"),

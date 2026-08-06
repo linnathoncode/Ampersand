@@ -38,6 +38,28 @@
     "enabled": true,
     "autoSeedClaims": false,
     "godminEmail": "GODMIN_EMAIL",
-    "godminPassword": "GODMIN_PASSWORD"
+    "godminPassword": "GODMIN_PASSWORD",
+    "seed": {
+      "roles": [
+        {
+          "name": "model-publisher",
+          "description": "Can publish candidate model versions"
+        }
+      ],
+      "claims": [
+        {
+          "action": "publish",
+          "path": "model_versions",
+          "method": "POST",
+          "description": "Publish candidate model versions"
+        }
+      ],
+      "roleClaimAssignments": [
+        {
+          "role": "model-publisher",
+          "claims": ["publish.model_versions"]
+        }
+      ]
+    }
   }
 }

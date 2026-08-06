@@ -1,7 +1,7 @@
 import { Type, type Static } from "@sinclair/typebox";
 
-import { PostgreSqlIdentifierSchema } from "./dataset-definition";
-import { TrainingWorkerFeatureDataTypeDto } from "./training-worker-input";
+import { PostgreSqlIdentifierSchema } from "../dataset/definition";
+import { TrainingWorkerFeatureDataTypeDto } from "./worker-input";
 
 export const TrainingWorkerMetricsDto = Type.Object(
   {

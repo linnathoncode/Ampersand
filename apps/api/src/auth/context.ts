@@ -1,0 +1,40 @@
+export const PUBLISH_MODEL_CLAIM = "publish.model_versions";
+
+export type AuthContext = {
+  userId: string;
+  schemaName: string;
+  claims: string[];
+};
+
+export function getAuthContext(headers: Headers): AuthContext | null {
+  const userId = headers.get("x-user-id");
+  const schemaName = headers.get("x-tenant-schema");
+
+  if (!userId || !schemaName) {
+    return null;
+  }
+
+  return {
+    userId,
+    schemaName,
+    claims: decodeClaims(headers.get("x-user-claims")),
+  };
+}
+
+export function hasClaim(context: AuthContext, requiredClaim: string): boolean {
+  return context.claims.includes(requiredClaim);
+}
+
+function decodeClaims(header: string | null): string[] {
+  if (!header) {
+    return [];
+  }
+
+  return header.split(",").map((claim) => {
+    try {
+      return decodeURIComponent(claim);
+    } catch {
+      return claim;
+    }
+  });
+}

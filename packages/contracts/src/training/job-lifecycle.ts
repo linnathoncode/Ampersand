@@ -1,4 +1,4 @@
-import type { TrainingJobStatus } from "./training-job";
+import type { TrainingJobStatus } from "./job";
 
 export const TRAINING_JOB_TRANSITIONS = {
   queued: ["running", "cancelled"],
