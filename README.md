@@ -16,7 +16,8 @@ Ampersand/
 ├── artifacts/               # Local development model artifacts
 ├── docs/                    # Architecture and setup documents
 └── tests/
-    └── e2e/                 # End-to-end workflow tests
+    ├── e2e/                 # End-to-end workflow tests
+    └── integration/         # DB-backed workflow tests
 ```
 
 ## Documentation
@@ -24,3 +25,4 @@ Ampersand/
 - [Architecture](docs/architecture.md)
 - [Product requirements](docs/project-requirements.md)
 - [Local setup](docs/setup.md)
+- [Testing](docs/testing.md)

@@ -47,3 +47,7 @@ bun run infra:up
 ```
 
 Database rows persist in named Docker volumes when containers are stopped. Use `bun run infra:down` to stop the services without deleting their data.
+
+## Running Tests
+
+See [testing.md](testing.md) for the unit and integration test suites, their prerequisites, and troubleshooting.
