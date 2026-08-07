@@ -1,0 +1,169 @@
+import { and, eq, asc } from "drizzle-orm";
+import { drizzle } from "drizzle-orm/node-postgres";
+import { pgSchema } from "drizzle-orm/pg-core";
+import type { PoolClient } from "pg";
+
+import type { ModelFeatureMetadata } from "./generate-tool-schema";
+import {
+  createModelArtifactsForSchema,
+  createModelFeaturesForSchema,
+  createModelVersionsForSchema,
+  createDatasetDefinitionsForSchema,
+} from "../drizzle/schema";
+
+export type StoredModelFeature = {
+  columnName: string;
+  description: string;
+  unit: string | null;
+  dataType: string;
+  isRequired: boolean;
+  validMin: string | null;
+  validMax: string | null;
+  allowedValues: unknown;
+  position: number;
+};
+
+export type StoredToolGenerationModel = {
+  id: string;
+  status: string;
+  versionNumber: number;
+  datasetName: string;
+  targetColumn: string;
+  artifactId: string | null;
+};
+
+export async function listStoredModelFeatures(
+  client: PoolClient,
+  schemaName: string,
+  modelVersionId: string,
+): Promise<StoredModelFeature[]> {
+  const tenantSchema = pgSchema(schemaName);
+  const modelFeatures = createModelFeaturesForSchema(tenantSchema);
+  const database = drizzle(client);
+
+  return database
+    .select({
+      columnName: modelFeatures.columnName,
+      position: modelFeatures.position,
+      dataType: modelFeatures.dataType,
+      description: modelFeatures.description,
+      unit: modelFeatures.unit,
+      isRequired: modelFeatures.isRequired,
+      validMin: modelFeatures.validMin,
+      validMax: modelFeatures.validMax,
+      allowedValues: modelFeatures.allowedValues,
+    })
+    .from(modelFeatures)
+    .where(
+      and(
+        eq(modelFeatures.modelVersionId, modelVersionId),
+        eq(modelFeatures.isActive, true),
+      ),
+    )
+    .orderBy(asc(modelFeatures.position));
+}
+
+export function toModelFeatureMetadata(
+  feature: StoredModelFeature,
+): ModelFeatureMetadata {
+  const dataType = parseModelFeatureDataType(feature.dataType);
+  const allowedValues = parseAllowedValues(feature.allowedValues);
+
+  return {
+    columnName: feature.columnName,
+    dataType,
+    description: feature.description,
+    unit: feature.unit,
+    isRequired: feature.isRequired,
+    validMin: parseNullableNumber(feature.validMin, "validMin"),
+    validMax: parseNullableNumber(feature.validMax, "validMax"),
+    allowedValues,
+  };
+}
+
+function parseModelFeatureDataType(
+  value: string,
+): ModelFeatureMetadata["dataType"] {
+  if (
+    value === "number" ||
+    value === "integer" ||
+    value === "boolean" ||
+    value === "category"
+  ) {
+    return value;
+  }
+
+  throw new Error(`Unsupported model feature type: ${value}`);
+}
+
+function parseAllowedValues(value: unknown): Array<string | number> | null {
+  if (value === null) return null;
+  if (
+    !Array.isArray(value) ||
+    value.length === 0 ||
+    !value.every((item) => typeof item === "string" || typeof item === "number")
+  ) {
+    throw new Error("Invalid model feature allowed values");
+  }
+
+  return value;
+}
+
+function parseNullableNumber(
+  value: string | null,
+  fieldName: string,
+): number | null {
+  if (value === null) return null;
+
+  const parsed = Number(value);
+
+  if (!Number.isFinite(parsed)) {
+    throw new Error(`Invalid ${fieldName}: ${value}`);
+  }
+
+  return parsed;
+}
+
+export async function findToolGenerationModel(
+  client: PoolClient,
+  schemaName: string,
+  modelVersionId: string,
+): Promise<StoredToolGenerationModel | null> {
+  const tenantSchema = pgSchema(schemaName);
+  const modelVersions = createModelVersionsForSchema(tenantSchema);
+  const datasetDefinitions = createDatasetDefinitionsForSchema(tenantSchema);
+  const modelArtifacts = createModelArtifactsForSchema(tenantSchema);
+  const database = drizzle(client);
+
+  const rows = await database
+    .select({
+      id: modelVersions.id,
+      status: modelVersions.status,
+      versionNumber: modelVersions.versionNumber,
+      datasetName: datasetDefinitions.name,
+      targetColumn: datasetDefinitions.targetColumn,
+      artifactId: modelArtifacts.id,
+    })
+    .from(modelVersions)
+    .innerJoin(
+      datasetDefinitions,
+      eq(modelVersions.datasetDefinitionId, datasetDefinitions.id),
+    )
+    .leftJoin(
+      modelArtifacts,
+      and(
+        eq(modelArtifacts.modelVersionId, modelVersions.id),
+        eq(modelArtifacts.isActive, true),
+      ),
+    )
+    .where(
+      and(
+        eq(modelVersions.id, modelVersionId),
+        eq(modelVersions.isActive, true),
+        eq(datasetDefinitions.isActive, true),
+      ),
+    )
+    .limit(1);
+
+  return rows[0] ?? null;
+}
