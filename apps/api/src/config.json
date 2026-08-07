@@ -44,6 +44,10 @@
         {
           "name": "model-publisher",
           "description": "Can publish candidate model versions"
+        },
+        {
+          "name": "dataset-creator",
+          "description": "Can create dataset definitions"
         }
       ],
       "claims": [
@@ -52,6 +56,12 @@
           "path": "model_versions",
           "method": "POST",
           "description": "Publish candidate model versions"
+        },
+        {
+          "action": "create",
+          "path": "dataset_definitions",
+          "method": "POST",
+          "description": "Create dataset definitions"
         }
       ],
       "roleClaimAssignments": [
@@ -59,6 +69,12 @@
           "role": "model-publisher",
           "claims": [
             "publish.model_versions"
+          ]
+        },
+        {
+          "role": "dataset-creator",
+          "claims": [
+            "create.dataset_definitions"
           ]
         }
       ]

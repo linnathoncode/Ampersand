@@ -1,4 +1,5 @@
 export const PUBLISH_MODEL_CLAIM = "publish.model_versions";
+export const CREATE_DATASET_CLAIM = "create.dataset_definitions";
 
 export type AuthContext = {
   userId: string;

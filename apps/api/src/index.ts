@@ -1,6 +1,7 @@
 import { Elysia } from "elysia";
 import { NucleusElysiaPlugin } from "nucleus-core-ts";
 import { modelRoutes } from "./model/routes";
+import { datasetRoutes } from "./dataset/routes";
 const port = Number(process.env.PORT ?? 4000);
 
 new Elysia()
@@ -13,6 +14,7 @@ new Elysia()
     }),
   )
   .use(modelRoutes)
+  .use(datasetRoutes)
   .listen(port);
 
 console.log(`Ampersand API listening on http://localhost:${port}`);
