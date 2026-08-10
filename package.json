@@ -26,6 +26,8 @@
     "@sinclair/typebox": "0.34.52",
     "@types/bun": "1.3.14",
     "@types/pg": "8.20.0",
+    "apache-arrow": "21.2.0",
+    "parquet-wasm": "0.7.2",
     "pg": "8.22.0",
     "typescript": "7.0.2",
     "vitest": "4.1.0"

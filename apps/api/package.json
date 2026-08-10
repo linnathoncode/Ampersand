@@ -19,10 +19,12 @@
     "@ampersand/contracts": "workspace:*",
     "@elysiajs/cors": "1.4.2",
     "@sinclair/typebox": "0.34.52",
+    "apache-arrow": "^21.2.0",
     "drizzle-orm": "0.45.2",
     "elysia": "1.4.29",
     "ioredis": "5.11.1",
     "nucleus-core-ts": "0.9.805",
+    "parquet-wasm": "^0.7.2",
     "pg": "8.22.0"
   },
   "devDependencies": {

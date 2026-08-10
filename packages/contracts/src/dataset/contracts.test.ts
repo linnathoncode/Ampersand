@@ -6,6 +6,7 @@ import {
   CreateDatasetDefinitionDto,
   DatasetDefinitionErrorDto,
   DatasetDefinitionResponseDto,
+  DatasetSnapshotErrorDto,
 } from "./index";
 
 describe("dataset contracts", () => {
@@ -61,5 +62,31 @@ describe("dataset contracts", () => {
         target: { name: "energy_usage", description: "Energy" },
       }),
     ).toBe(false);
+  });
+
+  it("accepts every snapshot error code", () => {
+    for (const code of [
+      "DATASET_DEFINITION_NOT_FOUND",
+      "DATASET_SOURCE_TABLE_MISSING",
+      "DATASET_SOURCE_TABLE_NOT_ALLOWED",
+      "DATASET_COLUMN_MISSING",
+      "DATASET_COLUMN_INVALID_IDENTIFIER",
+      "DATASET_COLUMN_TIMEZONE_REQUIRED",
+      "DATASET_COLUMN_PRECISION_LOSS",
+      "DATASET_DEFINITION_HAS_NO_COLUMNS",
+      "SNAPSHOT_EMPTY_TABLE",
+      "SNAPSHOT_STORAGE_FAILED",
+      "SNAPSHOT_CONTENT_COLLISION",
+    ]) {
+      expect(
+        Value.Check(DatasetSnapshotErrorDto, {
+          error: {
+            code,
+            message: "Something went wrong",
+            issues: [{ path: "sourceTable", message: "Nope" }],
+          },
+        }),
+      ).toBe(true);
+    }
   });
 });
