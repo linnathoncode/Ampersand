@@ -1,12 +1,20 @@
 import { afterAll, describe, expect, test } from "bun:test";
+import pg from "pg";
 
 import { FormatRegistry } from "@sinclair/typebox";
 import { Value } from "@sinclair/typebox/value";
 import { DatasetDefinitionResponseDto } from "@ampersand/contracts";
 
-import { databasePool } from "../database/pool";
 import { createDatasetDefinition } from "./service";
 
+const { Pool } = pg;
+const databaseUrl = process.env.DATABASE_URL;
+
+if (!databaseUrl) {
+  throw new Error("DATABASE_URL is required");
+}
+
+const datasetIntegrationPool = new Pool({ connectionString: databaseUrl });
 const schemaName = "tenant_ampersand_dev";
 const userId = "22222222-2222-4222-8222-222222222222";
 
@@ -34,11 +42,11 @@ const validInput = {
 
 describe("dataset definition database integration", () => {
   afterAll(async () => {
-    await databasePool.end();
+    await datasetIntegrationPool.end();
   });
 
   test("creates a dataset definition from a real tenant table", async () => {
-    const client = await databasePool.connect();
+    const client = await datasetIntegrationPool.connect();
 
     try {
       await client.query("BEGIN");
@@ -102,7 +110,7 @@ describe("dataset definition database integration", () => {
   });
 
   test("rejects a missing source table with 404", async () => {
-    const client = await databasePool.connect();
+    const client = await datasetIntegrationPool.connect();
 
     try {
       await client.query("BEGIN");
@@ -127,7 +135,7 @@ describe("dataset definition database integration", () => {
   });
 
   test("rejects a platform-managed table with 403", async () => {
-    const client = await databasePool.connect();
+    const client = await datasetIntegrationPool.connect();
 
     try {
       await client.query("BEGIN");
@@ -152,7 +160,7 @@ describe("dataset definition database integration", () => {
   });
 
   test("rejects a view as a dataset source with 403", async () => {
-    const client = await databasePool.connect();
+    const client = await datasetIntegrationPool.connect();
 
     try {
       await client.query("BEGIN");

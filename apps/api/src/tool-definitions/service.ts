@@ -6,11 +6,15 @@ import type {
 import type { PoolClient } from "pg";
 import { generateToolDefinition } from "./generate-tool-schema";
 import {
+  findStoredToolDefinition,
   findToolGenerationModel,
+  listPublishedToolDefinitions,
   listStoredModelFeatures,
+  storeToolDefinition,
+  type StoredToolDefinition,
   toModelFeatureMetadata,
 } from "./repository";
-import { defaultMaxListeners } from "events";
+import { createToolDefinitionSha256 } from "./schema-hash";
 
 const TOOL_GENERATOR_VERSION = "1.0.0";
 
@@ -18,6 +22,17 @@ export type GenerateModelToolResult =
   | {
       ok: true;
       body: GeneratedToolDefinition;
+    }
+  | {
+      ok: false;
+      status: 404 | 409 | 422;
+      body: ToolGenerationError;
+    };
+
+export type StoredModelToolResult =
+  | {
+      ok: true;
+      body: StoredToolDefinition;
     }
   | {
       ok: false;
@@ -49,6 +64,28 @@ type ToolGenerationDependencies = {
 const defaultDependencies: ToolGenerationDependencies = {
   findModel: findToolGenerationModel,
   listFeatures: listStoredModelFeatures,
+};
+
+type ToolStorageDependencies = {
+  findExisting: typeof findStoredToolDefinition;
+  generateDefinition: typeof generateModelToolDefinition;
+  createHash: typeof createToolDefinitionSha256;
+  storeDefinition: typeof storeToolDefinition;
+};
+
+const defaultStorageDependencies: ToolStorageDependencies = {
+  findExisting: findStoredToolDefinition,
+  generateDefinition: generateModelToolDefinition,
+  createHash: createToolDefinitionSha256,
+  storeDefinition: storeToolDefinition,
+};
+
+type ToolDiscoveryDependencies = {
+  listPublished: typeof listPublishedToolDefinitions;
+};
+
+const defaultDiscoveryDependencies: ToolDiscoveryDependencies = {
+  listPublished: listPublishedToolDefinitions,
 };
 
 export async function generateModelToolDefinition(
@@ -148,4 +185,77 @@ export async function generateModelToolDefinition(
       },
     };
   }
+}
+
+export async function generateAndStoreModelToolDefinition(
+  client: PoolClient,
+  schemaName: string,
+  modelVersionId: string,
+  createdBy: string,
+  dependencies: ToolStorageDependencies = defaultStorageDependencies,
+): Promise<StoredModelToolResult> {
+  const existingDefinition = await dependencies.findExisting(
+    client,
+    schemaName,
+    modelVersionId,
+  );
+  if (existingDefinition) {
+    return {
+      ok: false,
+      status: 409,
+      body: {
+        error: {
+          code: "TOOL_DEFINITION_ALREADY_EXISTS",
+          message: "This model version already has a tool definition",
+        },
+      },
+    };
+  }
+
+  const generationResult = await dependencies.generateDefinition(
+    client,
+    schemaName,
+    modelVersionId,
+  );
+
+  if (!generationResult.ok) {
+    return generationResult;
+  }
+
+  const schemaSha256 = dependencies.createHash(generationResult.body);
+
+  const storedDefinition = await dependencies.storeDefinition(
+    client,
+    schemaName,
+    generationResult.body,
+    schemaSha256,
+    createdBy,
+  );
+
+  return {
+    ok: true,
+    body: storedDefinition,
+  };
+}
+
+export async function getDiscoverableTools(
+  client: PoolClient,
+  schemaName: string,
+  dependencies: ToolDiscoveryDependencies = defaultDiscoveryDependencies,
+): Promise<GeneratedToolDefinition[]> {
+  const storedDefinitions = await dependencies.listPublished(
+    client,
+    schemaName,
+  );
+
+  return storedDefinitions.map((definition) => ({
+    modelVersionId: definition.modelVersionId,
+    toolName: definition.toolName,
+    description: definition.description,
+    generatorVersion: definition.generatorVersion,
+    inputSchema:
+      definition.inputSchema as GeneratedToolDefinition["inputSchema"],
+    outputSchema:
+      definition.outputSchema as GeneratedToolDefinition["outputSchema"],
+  }));
 }

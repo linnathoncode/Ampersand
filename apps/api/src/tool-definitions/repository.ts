@@ -1,14 +1,17 @@
-import { and, eq, asc } from "drizzle-orm";
+import type { GeneratedToolDefinition } from "@ampersand/contracts";
+
+import { and, asc, eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { pgSchema } from "drizzle-orm/pg-core";
 import type { PoolClient } from "pg";
 
 import type { ModelFeatureMetadata } from "./generate-tool-schema";
 import {
+  createDatasetDefinitionsForSchema,
   createModelArtifactsForSchema,
   createModelFeaturesForSchema,
   createModelVersionsForSchema,
-  createDatasetDefinitionsForSchema,
+  createToolDefinitionsForSchema,
 } from "../drizzle/schema";
 
 export type StoredModelFeature = {
@@ -30,6 +33,18 @@ export type StoredToolGenerationModel = {
   datasetName: string;
   targetColumn: string;
   artifactId: string | null;
+};
+
+export type StoredToolDefinition = {
+  id: string;
+  modelVersionId: string;
+  toolName: string;
+  description: string;
+  inputSchema: unknown;
+  outputSchema: unknown;
+  generatorVersion: string;
+  schemaSha256: string;
+  generatedAt: Date;
 };
 
 export async function listStoredModelFeatures(
@@ -166,4 +181,119 @@ export async function findToolGenerationModel(
     .limit(1);
 
   return rows[0] ?? null;
+}
+
+export async function storeToolDefinition(
+  client: PoolClient,
+  schemaName: string,
+  definition: GeneratedToolDefinition,
+  schemaSha256: string,
+  createdBy: string,
+): Promise<StoredToolDefinition> {
+  const tenantSchema = pgSchema(schemaName);
+  const toolDefinitions = createToolDefinitionsForSchema(tenantSchema);
+  const database = drizzle(client);
+  const generatedAt = new Date();
+
+  const rows = await database
+    .insert(toolDefinitions)
+    .values({
+      modelVersionId: definition.modelVersionId,
+      toolName: definition.toolName,
+      description: definition.description,
+      inputSchema: definition.inputSchema,
+      outputSchema: definition.outputSchema,
+      generatorVersion: definition.generatorVersion,
+      schemaSha256,
+      generatedAt,
+      createdBy,
+    })
+    .returning({
+      id: toolDefinitions.id,
+      modelVersionId: toolDefinitions.modelVersionId,
+      toolName: toolDefinitions.toolName,
+      description: toolDefinitions.description,
+      inputSchema: toolDefinitions.inputSchema,
+      outputSchema: toolDefinitions.outputSchema,
+      generatorVersion: toolDefinitions.generatorVersion,
+      schemaSha256: toolDefinitions.schemaSha256,
+      generatedAt: toolDefinitions.generatedAt,
+    });
+
+  const storedDefinition = rows[0];
+
+  if (!storedDefinition) {
+    throw new Error("Tool definition could not be stored");
+  }
+
+  return storedDefinition;
+}
+
+export async function findStoredToolDefinition(
+  client: PoolClient,
+  schemaName: string,
+  modelVersionId: string,
+): Promise<StoredToolDefinition | null> {
+  const tenantSchema = pgSchema(schemaName);
+  const toolDefinitions = createToolDefinitionsForSchema(tenantSchema);
+  const database = drizzle(client);
+
+  const rows = await database
+    .select({
+      id: toolDefinitions.id,
+      modelVersionId: toolDefinitions.modelVersionId,
+      toolName: toolDefinitions.toolName,
+      description: toolDefinitions.description,
+      inputSchema: toolDefinitions.inputSchema,
+      outputSchema: toolDefinitions.outputSchema,
+      generatorVersion: toolDefinitions.generatorVersion,
+      schemaSha256: toolDefinitions.schemaSha256,
+      generatedAt: toolDefinitions.generatedAt,
+    })
+    .from(toolDefinitions)
+    .where(
+      and(
+        eq(toolDefinitions.isActive, true),
+        eq(toolDefinitions.modelVersionId, modelVersionId),
+      ),
+    )
+    .limit(1);
+
+  return rows[0] ?? null;
+}
+
+export async function listPublishedToolDefinitions(
+  client: PoolClient,
+  schemaName: string,
+): Promise<StoredToolDefinition[]> {
+  const tenantSchema = pgSchema(schemaName);
+  const toolDefinitions = createToolDefinitionsForSchema(tenantSchema);
+  const modelVersions = createModelVersionsForSchema(tenantSchema);
+  const database = drizzle(client);
+
+  return database
+    .select({
+      id: toolDefinitions.id,
+      modelVersionId: toolDefinitions.modelVersionId,
+      toolName: toolDefinitions.toolName,
+      description: toolDefinitions.description,
+      inputSchema: toolDefinitions.inputSchema,
+      outputSchema: toolDefinitions.outputSchema,
+      generatorVersion: toolDefinitions.generatorVersion,
+      schemaSha256: toolDefinitions.schemaSha256,
+      generatedAt: toolDefinitions.generatedAt,
+    })
+    .from(toolDefinitions)
+    .innerJoin(
+      modelVersions,
+      eq(toolDefinitions.modelVersionId, modelVersions.id),
+    )
+    .where(
+      and(
+        eq(toolDefinitions.isActive, true),
+        eq(modelVersions.isActive, true),
+        eq(modelVersions.status, "published"),
+      ),
+    )
+    .orderBy(asc(toolDefinitions.toolName));
 }

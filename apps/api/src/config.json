@@ -6,6 +6,7 @@
     "url": "DATABASE_URL",
     "isMultiTenant": true
   },
+  "redis": {},
   "authentication": {
     "enabled": true,
     "mode": "full",
@@ -62,13 +63,20 @@
           "path": "dataset_definitions",
           "method": "POST",
           "description": "Create dataset definitions"
+        },
+        {
+          "action": "generate",
+          "path": "tool_definitions",
+          "method": "POST",
+          "description": "Generate and store tool definitions"
         }
       ],
       "roleClaimAssignments": [
         {
           "role": "model-publisher",
           "claims": [
-            "publish.model_versions"
+            "publish.model_versions",
+            "generate.tool_definitions"
           ]
         },
         {

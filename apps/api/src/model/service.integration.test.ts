@@ -1,17 +1,25 @@
 import { afterAll, describe, expect, test } from "bun:test";
+import pg from "pg";
 
-import { databasePool } from "../database/pool";
 import { publishCandidateModel } from "./service";
 
+const { Pool } = pg;
+const databaseUrl = process.env.DATABASE_URL;
+
+if (!databaseUrl) {
+  throw new Error("DATABASE_URL is required");
+}
+
+const modelIntegrationPool = new Pool({ connectionString: databaseUrl });
 const schemaName = "tenant_ampersand_dev";
 
 describe("model publication database integration", () => {
   afterAll(async () => {
-    await databasePool.end();
+    await modelIntegrationPool.end();
   });
 
   test("publishes a candidate model", async () => {
-    const client = await databasePool.connect();
+    const client = await modelIntegrationPool.connect();
 
     try {
       await client.query("BEGIN");
