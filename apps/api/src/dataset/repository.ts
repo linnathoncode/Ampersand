@@ -1,4 +1,8 @@
-import type { DatasetColumnRole, DatasetColumnType } from "@ampersand/contracts";
+import type {
+  DatasetColumnRole,
+  DatasetColumnType,
+  SchemaSummary,
+} from "@ampersand/contracts";
 import type { PoolClient } from "pg";
 
 import { inferColumnType, type SourceColumnInfo } from "./schema-inference";
@@ -164,4 +168,116 @@ export async function insertDatasetColumn(
   }
 
   return { ...column, id: row.id };
+}
+
+export type LoadedDatasetDefinition = {
+  id: string;
+  name: string;
+  sourceSchema: string;
+  sourceTable: string;
+  createdBy: string | null;
+};
+
+export type LoadedDatasetColumn = {
+  name: string;
+  role: DatasetColumnRole;
+  dataType: DatasetColumnType;
+  isNullable: boolean;
+  position: number;
+};
+
+export async function loadDatasetDefinition(
+  pool: PoolClient,
+  definitionId: string,
+): Promise<LoadedDatasetDefinition | null> {
+  const definition = await pool.query<{
+    id: string;
+    name: string;
+    source_schema: string;
+    source_table: string;
+    created_by: string | null;
+  }>(
+    `SELECT id, name, source_schema, source_table, created_by
+     FROM dataset_definitions
+     WHERE id = $1 AND is_active = true`,
+    [definitionId],
+  );
+
+  const row = definition.rows[0];
+  if (!row) {
+    return null;
+  }
+
+  return {
+    id: row.id,
+    name: row.name,
+    sourceSchema: row.source_schema,
+    sourceTable: row.source_table,
+    createdBy: row.created_by,
+  };
+}
+
+export async function loadDatasetColumns(
+  pool: PoolClient,
+  definitionId: string,
+): Promise<LoadedDatasetColumn[]> {
+  const columns = await pool.query<{
+    column_name: string;
+    role: string;
+    data_type: string;
+    is_nullable: boolean;
+    position: number;
+  }>(
+    `SELECT column_name, role, data_type, is_nullable, position
+     FROM dataset_columns
+     WHERE dataset_definition_id = $1
+       AND role IN ('feature', 'target', 'time')
+     ORDER BY position`,
+    [definitionId],
+  );
+
+  return columns.rows.map((column) => ({
+    name: column.column_name,
+    role: column.role as DatasetColumnRole,
+    dataType: column.data_type as DatasetColumnType,
+    isNullable: column.is_nullable,
+    position: column.position,
+  }));
+}
+
+export type InsertedDatasetSnapshot = {
+  id: string;
+  frozenAt: Date;
+};
+
+export async function insertDatasetSnapshot(
+  pool: PoolClient,
+  input: {
+    datasetDefinitionId: string;
+    storageUri: string;
+    contentSha256: string;
+    rowCount: number;
+    schemaSummary: SchemaSummary;
+  },
+): Promise<InsertedDatasetSnapshot> {
+  const result = await pool.query<{ id: string; frozen_at: Date }>(
+    `INSERT INTO dataset_snapshots
+       (dataset_definition_id, storage_uri, storage_format, content_sha256, row_count, schema_summary, frozen_at)
+     VALUES ($1, $2, 'parquet', $3, $4, $5, now())
+     RETURNING id, frozen_at`,
+    [
+      input.datasetDefinitionId,
+      input.storageUri,
+      input.contentSha256,
+      input.rowCount,
+      JSON.stringify(input.schemaSummary),
+    ],
+  );
+
+  const row = result.rows[0];
+  if (!row) {
+    throw new Error("Failed to create a dataset snapshot");
+  }
+
+  return { id: row.id, frozenAt: row.frozen_at };
 }
