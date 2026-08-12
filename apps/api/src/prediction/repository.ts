@@ -18,6 +18,59 @@ export type StoreRejectedInferenceCallInput = {
   latencyMs: number;
 };
 
+export type StoreSuccessfulInferenceCallInput = {
+  toolDefinitionId: string;
+  modelVersionId: string;
+  createdBy: string;
+  conversationId: string | null;
+  inputs: Record<string, PredictionInputValue>;
+  prediction: number;
+  uncertainty: number | null;
+  warnings: string[];
+  latencyMs: number;
+};
+
+export async function storeSuccessfulInferenceCall(
+  client: PoolClient,
+  schemaName: string,
+  input: StoreSuccessfulInferenceCallInput,
+): Promise<string> {
+  const tenantSchema = pgSchema(schemaName);
+  const inferenceCalls = createInferenceCallsForSchema(tenantSchema);
+  const database = drizzle(client);
+
+  const rows = await database
+    .insert(inferenceCalls)
+    .values({
+      toolDefinitionId: input.toolDefinitionId,
+      modelVersionId: input.modelVersionId,
+      createdBy: input.createdBy,
+      conversationId: input.conversationId,
+      inputPayload: input.inputs,
+      outcome: "prediction",
+      prediction: String(input.prediction),
+      uncertainty:
+        input.uncertainty === null
+          ? null
+          : String(input.uncertainty),
+      warnings: input.warnings,
+      rejectionCode: null,
+      rejectionMessage: null,
+      latencyMs: input.latencyMs,
+    })
+    .returning({
+      id: inferenceCalls.id,
+    });
+
+  const storedCall = rows[0];
+
+  if (!storedCall) {
+    throw new Error("Successful inference call could not be stored");
+  }
+
+  return storedCall.id;
+}
+
 export async function storeRejectedInferenceCall(
   client: PoolClient,
   schemaName: string,

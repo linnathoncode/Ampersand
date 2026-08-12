@@ -8,6 +8,8 @@ import { Value } from "@sinclair/typebox/value";
 import type { PoolClient } from "pg";
 
 import { findPublishedToolByName } from "../tool-definitions/repository";
+import { collectBoundaryWarnings } from "./boundary-warnings";
+import { getBoundaryWarningRatio } from "./config";
 import { storeRejectedInferenceCall } from "./repository";
 import { validatePredictionInputs } from "./validate-inputs";
 
@@ -25,6 +27,7 @@ export type ValidateToolPredictionResult =
       modelVersionId: string;
       modelVersion: number;
       inputs: Record<string, PredictionInputValue>;
+      warnings: string[];
     }
   | {
       kind: "rejected";
@@ -39,6 +42,7 @@ export type ValidateToolPredictionResult =
 type PredictionValidationDependencies = {
   findTool: typeof findPublishedToolByName;
   storeRejection: typeof storeRejectedInferenceCall;
+  boundaryWarningRatio?: number;
 };
 
 const defaultDependencies: PredictionValidationDependencies = {
@@ -123,6 +127,11 @@ export async function validateToolPrediction(
     modelVersionId: tool.modelVersionId,
     modelVersion: tool.modelVersion,
     inputs: validation.inputs,
+    warnings: collectBoundaryWarnings(
+      inputSchema,
+      validation.inputs,
+      dependencies.boundaryWarningRatio ?? getBoundaryWarningRatio(),
+    ),
   };
 }
 

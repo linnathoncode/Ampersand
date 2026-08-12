@@ -8,6 +8,7 @@ import { ToolInputSchemaDto } from "@ampersand/contracts";
 import { Value } from "@sinclair/typebox/value";
 import pg from "pg";
 
+import { completeToolPrediction } from "./complete-prediction";
 import { validateToolPrediction } from "./service";
 
 const { Pool } = pg;
@@ -199,6 +200,141 @@ describe("prediction validation database integration", () => {
             auditOutcome: audit.outcome,
             prediction: audit.prediction,
             auditStored,
+          },
+          null,
+          2,
+        ),
+      );
+    } finally {
+      await client.query("ROLLBACK");
+      client.release();
+    }
+  });
+
+  test("stores a completed prediction and its warnings", async () => {
+    const client = await integrationPool.connect();
+
+    try {
+      await client.query("BEGIN");
+      await client.query(`SET LOCAL search_path TO ${schemaName}`);
+
+      const toolResult = await client.query<PublishedToolRow>(`
+        SELECT td.id, td.tool_name, td.input_schema
+        FROM tool_definitions td
+        INNER JOIN model_versions mv ON mv.id = td.model_version_id
+        WHERE td.is_active = true
+          AND mv.is_active = true
+          AND mv.status = 'published'
+        LIMIT 1
+      `);
+
+      const tool = toolResult.rows[0];
+
+      if (!tool || !Value.Check(ToolInputSchemaDto, tool.input_schema)) {
+        throw new Error("No published tool with a valid schema exists");
+      }
+
+      const inputSchema = tool.input_schema;
+
+      const userResult = await client.query<{ id: string }>(`
+        SELECT id
+        FROM users
+        WHERE is_active = true
+        LIMIT 1
+      `);
+      const userId = userResult.rows[0]?.id;
+
+      if (!userId) {
+        throw new Error("No active tenant user exists");
+      }
+
+      const inputs = Object.fromEntries(
+        inputSchema.required.map((name) => [
+          name,
+          createValidValue(inputSchema.properties[name]!),
+        ]),
+      );
+      const request = {
+        toolName: tool.tool_name,
+        conversationId: "day-27-integration",
+        inputs,
+      };
+
+      const validation = await validateToolPrediction(
+        client,
+        schemaName,
+        userId,
+        request,
+      );
+
+      if (validation.kind !== "accepted") {
+        throw new Error("Expected valid inputs to be accepted");
+      }
+
+      // Simulates model output until the ONNX inference layer is implemented.
+      const response = await completeToolPrediction(
+        client,
+        schemaName,
+        userId,
+        {
+          accepted: validation,
+          request,
+          inference: {
+            prediction: 124.6,
+            uncertainty: 3.2,
+          },
+          latencyMs: 18,
+        },
+      );
+
+      const auditResult = await client.query<{
+        outcome: string;
+        prediction: string | null;
+        uncertainty: string | null;
+        warnings: string[];
+        rejection_code: string | null;
+      }>(
+        `
+          SELECT
+            outcome,
+            prediction,
+            uncertainty,
+            warnings,
+            rejection_code
+          FROM inference_calls
+          WHERE tool_definition_id = $1
+            AND conversation_id = $2
+          ORDER BY created_at DESC
+          LIMIT 1
+        `,
+        [tool.id, request.conversationId],
+      );
+      const audit = auditResult.rows[0];
+
+      if (!audit) {
+        throw new Error("Successful inference audit was not found");
+      }
+
+      expect(response.outcome).toBe("prediction");
+      expect(response.prediction).toBe(124.6);
+      expect(audit).toEqual({
+        outcome: "prediction",
+        prediction: "124.6",
+        uncertainty: "3.2",
+        warnings: validation.warnings,
+        rejection_code: null,
+      });
+
+      console.log(
+        "Prediction success integration:",
+        JSON.stringify(
+          {
+            toolName: tool.tool_name,
+            prediction: response.prediction,
+            uncertainty: response.uncertainty,
+            warnings: response.warnings,
+            auditOutcome: audit.outcome,
+            auditStored: true,
           },
           null,
           2,

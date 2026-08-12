@@ -53,6 +53,33 @@ describe("prediction validation service", () => {
       inputs: {
         temperature: 22,
       },
+      warnings: [],
+    });
+  });
+
+  test("adds a warning for valid input near a model boundary", async () => {
+    const result = await validateToolPrediction(
+      {} as PoolClient,
+      "tenant_ampersand_dev",
+      createdBy,
+      {
+        ...request,
+        inputs: { temperature: 48 },
+      },
+      {
+        findTool: async () => storedTool,
+        storeRejection: async () => {
+          throw new Error("Valid inputs must not store a rejection");
+        },
+        boundaryWarningRatio: 0.1,
+      },
+    );
+
+    expect(result).toMatchObject({
+      kind: "accepted",
+      warnings: [
+        "temperature is close to the maximum accepted value of 50",
+      ],
     });
   });
 

@@ -120,6 +120,7 @@ describe("prediction route", () => {
         modelVersionId,
         modelVersion: 1,
         inputs: validRequest.inputs,
+        warnings: [],
       }),
     });
 
@@ -138,6 +139,65 @@ describe("prediction route", () => {
         message: "Inputs are valid, but model inference is not implemented",
       },
     });
+  });
+
+  test("returns a completed prediction from an injected inference runner", async () => {
+    const accepted = {
+      kind: "accepted" as const,
+      toolDefinitionId: "33333333-3333-4333-8333-333333333333",
+      modelVersionId,
+      modelVersion: 1,
+      inputs: { temperature: 48 },
+      warnings: [
+        "temperature is close to the maximum accepted value of 50",
+      ],
+    };
+
+    const completedResponse = {
+      outcome: "prediction" as const,
+      prediction: 124.6,
+      uncertainty: 3.2,
+      modelVersionId,
+      modelVersion: 1,
+      warnings: accepted.warnings,
+      rejection: null,
+    };
+
+    const routes = createPredictionRoutes({
+      withTransaction: runWithoutDatabase,
+      validatePrediction: async () => accepted,
+      // Simulates future model execution without loading an ONNX artifact.
+      runInference: async () => ({
+        prediction: 124.6,
+        uncertainty: 3.2,
+      }),
+      completePrediction: async (_client, schemaName, createdBy, input) => {
+        expect(schemaName).toBe("tenant_ampersand_dev");
+        expect(createdBy).toBe(authorizedHeaders["x-user-id"]);
+        expect(input.accepted).toEqual(accepted);
+        expect(input.inference).toEqual({
+          prediction: 124.6,
+          uncertainty: 3.2,
+        });
+        expect(input.latencyMs).toBeGreaterThanOrEqual(0);
+
+        return completedResponse;
+      },
+    });
+
+    const response = await routes.handle(
+      new Request(predictionUrl, {
+        method: "POST",
+        headers: authorizedHeaders,
+        body: JSON.stringify({
+          ...validRequest,
+          inputs: accepted.inputs,
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual(completedResponse);
   });
 
   test("rejects a malformed request body", async () => {
