@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { PoolClient } from "pg";
 
-import { validateToolPrediction } from "./service";
+import { validateToolPrediction } from "../service";
 
 const storedTool = {
   id: "11111111-1111-4111-8111-111111111111",

@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import type { ToolInputSchema } from "@ampersand/contracts";
 
-import { validatePredictionInputs } from "./validate-inputs";
+import { validatePredictionInputs } from "../validate-inputs";
 
 const inputSchema: ToolInputSchema = {
   type: "object",

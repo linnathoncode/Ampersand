@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { toModelFeatureMetadata } from "./repository";
+import { toModelFeatureMetadata } from "../repository";
 
 describe("stored model feature conversion", () => {
   test("converts stored database values into generator metadata", () => {

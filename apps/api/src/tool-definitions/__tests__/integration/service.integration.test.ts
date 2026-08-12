@@ -4,7 +4,7 @@ import pg from "pg";
 import {
   generateAndStoreModelToolDefinition,
   getDiscoverableTools,
-} from "./service";
+} from "../../service";
 
 const { Pool } = pg;
 const databaseUrl = process.env.DATABASE_URL;

@@ -1,11 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import type { PoolClient } from "pg";
-import { generateToolDefinition } from "./generate-tool-schema";
+import { generateToolDefinition } from "../generate-tool-schema";
 import {
   generateAndStoreModelToolDefinition,
   generateModelToolDefinition,
   getDiscoverableTools,
-} from "./service";
+} from "../service";
 
 const modelVersionId = "d0ccd219-d34e-4096-a914-c9671d952bd0";
 const createdBy = "11111111-1111-4111-8111-111111111111";

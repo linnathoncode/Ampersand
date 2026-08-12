@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
-import { generateToolDefinition } from "./generate-tool-schema";
-import { createToolDefinitionSha256 } from "./schema-hash";
+import { generateToolDefinition } from "../generate-tool-schema";
+import { createToolDefinitionSha256 } from "../schema-hash";
 
 const createDefinition = (modelVersionId: string) =>
   generateToolDefinition({

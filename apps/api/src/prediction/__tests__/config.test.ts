@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { getBoundaryWarningRatio } from "./config";
+import { getBoundaryWarningRatio } from "../config";
 
 describe("prediction configuration", () => {
   test("uses the default boundary warning ratio", () => {

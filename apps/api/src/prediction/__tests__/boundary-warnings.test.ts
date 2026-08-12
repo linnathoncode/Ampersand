@@ -1,7 +1,7 @@
 import type { ToolInputSchema } from "@ampersand/contracts";
 import { describe, expect, test } from "bun:test";
 
-import { collectBoundaryWarnings } from "./boundary-warnings";
+import { collectBoundaryWarnings } from "../boundary-warnings";
 
 const schema: ToolInputSchema = {
   type: "object",

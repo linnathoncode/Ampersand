@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 process.env.DATABASE_URL ??= "postgresql://unused:unused@localhost:5432/unused";
 
-const { toolDefinitionRoutes } = await import("./routes");
+const { toolDefinitionRoutes } = await import("../routes");
 
 const modelVersionId = "11111111-1111-4111-8111-111111111111";
 const generationUrl =

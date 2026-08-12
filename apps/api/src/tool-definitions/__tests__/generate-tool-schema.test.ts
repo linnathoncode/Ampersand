@@ -5,7 +5,7 @@ import {
   generateToolInputSchema,
   generateToolDefinition,
   predictionToolOutputSchema,
-} from "./generate-tool-schema";
+} from "../generate-tool-schema";
 
 describe("tool input property generation", () => {
   test("converts a numerical model feature", () => {

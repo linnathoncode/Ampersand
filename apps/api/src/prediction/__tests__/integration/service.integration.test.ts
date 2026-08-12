@@ -8,8 +8,8 @@ import { ToolInputSchemaDto } from "@ampersand/contracts";
 import { Value } from "@sinclair/typebox/value";
 import pg from "pg";
 
-import { completeToolPrediction } from "./complete-prediction";
-import { validateToolPrediction } from "./service";
+import { completeToolPrediction } from "../../complete-prediction";
+import { validateToolPrediction } from "../../service";
 
 const { Pool } = pg;
 const databaseUrl = process.env.DATABASE_URL;

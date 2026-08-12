@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { createPredictionSuccessResponse } from "./create-response";
+import { createPredictionSuccessResponse } from "../create-response";
 
 const modelVersionId = "22222222-2222-4222-8222-222222222222";
 

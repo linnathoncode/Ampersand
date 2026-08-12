@@ -5,7 +5,7 @@ import type { PoolClient } from "pg";
 process.env.DATABASE_URL ??=
   "postgresql://unused:unused@localhost:5432/unused";
 
-const { createPredictionRoutes, predictionRoutes } = await import("./routes");
+const { createPredictionRoutes, predictionRoutes } = await import("../routes");
 
 const predictionUrl = "http://localhost/predictions";
 const modelVersionId = "22222222-2222-4222-8222-222222222222";

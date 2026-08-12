@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { PoolClient } from "pg";
 
-import { completeToolPrediction } from "./complete-prediction";
+import { completeToolPrediction } from "../complete-prediction";
 
 const modelVersionId = "22222222-2222-4222-8222-222222222222";
 
