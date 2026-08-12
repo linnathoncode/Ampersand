@@ -45,6 +45,15 @@ describe("dataset contracts", () => {
     expect(
       Value.Check(DatasetDefinitionErrorDto, {
         error: {
+          code: "INVALID_DATASET_DEFINITION_REQUEST",
+          message: "The dataset definition request is invalid",
+          issues: [{ path: "features.0", message: "Expected object" }],
+        },
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(DatasetDefinitionErrorDto, {
+        error: {
           code: "COLUMN_NOT_FOUND",
           message: "Column was not found",
           issues: [{ path: "features.0", message: "Unknown column" }],

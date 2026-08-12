@@ -1,8 +1,10 @@
 import {
   CreateDatasetDefinitionDto,
   CreateDatasetSnapshotParamsDto,
+  type CreateDatasetDefinitionInput,
+  type DatasetDefinitionError,
 } from "@ampersand/contracts";
-
+import { Value } from "@sinclair/typebox/value";
 import { Elysia } from "elysia";
 
 import { CREATE_DATASET_CLAIM, getAuthContext, hasClaim } from "../auth/context";
@@ -16,7 +18,7 @@ const snapshotStoragePath = process.env.ARTIFACT_STORAGE_PATH ?? "./artifacts";
 export const datasetRoutes = new Elysia({ prefix: "/dataset-definitions" })
   .post(
     "/",
-    async ({ body, request, set }) => {
+    async ({ request, set }) => {
       const auth = getAuthContext(request.headers);
 
       if (!auth) {
@@ -41,8 +43,15 @@ export const datasetRoutes = new Elysia({ prefix: "/dataset-definitions" })
         };
       }
 
+      const body = await parseDatasetDefinitionBody(request);
+      if (!body.ok) {
+        set.status = 400;
+
+        return body.body;
+      }
+
       const result = await withTenantTransaction(auth.schemaName, (client) =>
-        createDatasetDefinition(client, auth.schemaName, auth.userId, body),
+        createDatasetDefinition(client, auth.schemaName, auth.userId, body.body),
       );
 
       if (!result.ok) {
@@ -55,7 +64,6 @@ export const datasetRoutes = new Elysia({ prefix: "/dataset-definitions" })
 
       return result.body;
     },
-    { body: CreateDatasetDefinitionDto },
   )
   .post(
     "/:id/snapshot",
@@ -110,3 +118,52 @@ export const datasetRoutes = new Elysia({ prefix: "/dataset-definitions" })
     },
     { params: CreateDatasetSnapshotParamsDto },
   );
+
+type ParsedDatasetDefinitionBody =
+  | { ok: true; body: CreateDatasetDefinitionInput }
+  | { ok: false; body: DatasetDefinitionError };
+
+async function parseDatasetDefinitionBody(
+  request: Request,
+): Promise<ParsedDatasetDefinitionBody> {
+  let parsed: unknown;
+
+  try {
+    parsed = JSON.parse(await request.text());
+  } catch {
+    return {
+      ok: false,
+      body: invalidRequestError([
+        {
+          path: "$",
+          message: "The request body could not be parsed as JSON",
+        },
+      ]),
+    };
+  }
+
+  const issues = [...Value.Errors(CreateDatasetDefinitionDto, parsed)].map(
+    (error) => ({
+      path: error.path || "$",
+      message: error.message,
+    }),
+  );
+
+  if (issues.length > 0) {
+    return { ok: false, body: invalidRequestError(issues) };
+  }
+
+  return { ok: true, body: parsed as CreateDatasetDefinitionInput };
+}
+
+function invalidRequestError(
+  issues: { path: string; message: string }[],
+): DatasetDefinitionError {
+  return {
+    error: {
+      code: "INVALID_DATASET_DEFINITION_REQUEST",
+      message: "The dataset definition request is invalid",
+      issues,
+    },
+  };
+}

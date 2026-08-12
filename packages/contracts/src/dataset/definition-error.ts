@@ -1,6 +1,7 @@
 import { Type, type Static } from "@sinclair/typebox";
 
 export const DatasetDefinitionErrorCodeDto = Type.Union([
+  Type.Literal("INVALID_DATASET_DEFINITION_REQUEST"),
   Type.Literal("SOURCE_TABLE_NOT_FOUND"),
   Type.Literal("SOURCE_TABLE_NOT_ALLOWED"),
   Type.Literal("COLUMN_NOT_FOUND"),
