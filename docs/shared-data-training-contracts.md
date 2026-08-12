@@ -140,6 +140,7 @@ The request does not accept a schema name, data types, nullability, roles, or po
 
 Allowed error codes are:
 
+- `INVALID_DATASET_DEFINITION_REQUEST`
 - `SOURCE_TABLE_NOT_FOUND`
 - `SOURCE_TABLE_NOT_ALLOWED`
 - `COLUMN_NOT_FOUND`
@@ -161,6 +162,20 @@ Nucleus must verify that the source table is allowed and exists in the authentic
 | `422` | Selected columns, roles, or types are invalid |
 
 Authentication and general authorization responses remain Nucleus-owned.
+
+### Snapshot endpoint
+
+`POST /dataset-definitions/:id/snapshot` freezes the dataset definition into an immutable Parquet snapshot, writes it to storage, and returns `DatasetSnapshotRecordDto`. The endpoint takes only the dataset-definition UUID in the URL and never accepts a client-supplied snapshot ID, storage URI, checksum, row count, or schema summary.
+
+| HTTP status | Use |
+|---:|---|
+| `201` | Snapshot created |
+| `404` | Dataset definition does not exist |
+| `409` | A snapshot with identical content already exists |
+| `422` | Source table or selected columns are invalid for a snapshot |
+| `502` | Snapshot could not be written to storage |
+
+All non-success responses use `DatasetSnapshotErrorDto` with codes from `DatasetSnapshotErrorCodeDto`, including `DATASET_DEFINITION_NOT_FOUND`, `DATASET_SOURCE_TABLE_MISSING`, `DATASET_SOURCE_TABLE_NOT_ALLOWED`, `DATASET_DEFINITION_HAS_NO_COLUMNS`, `DATASET_COLUMN_MISSING`, `DATASET_COLUMN_INVALID_IDENTIFIER`, `DATASET_COLUMN_TIMEZONE_REQUIRED`, `DATASET_COLUMN_PRECISION_LOSS`, `SNAPSHOT_EMPTY_TABLE`, `SNAPSHOT_STORAGE_FAILED`, and `SNAPSHOT_CONTENT_COLLISION`.
 
 ## Snapshot-before-queue boundary
 
@@ -187,6 +202,23 @@ The user never supplies the snapshot ID, storage URI, checksum, row count, or sc
 ```
 
 No additional properties are accepted. Training policy is resolved by the server rather than supplied by the user.
+
+#### Training-request errors
+
+`TrainingJobRequestErrorDto` is the error response for a training request. It carries a stable machine-readable code from `TrainingJobRequestErrorCodeDto`, a summary message, and field-level issues. Allowed codes are `UNAUTHENTICATED`, `FORBIDDEN`, `INVALID_TRAINING_REQUEST`, `DATASET_DEFINITION_NOT_FOUND`, `DATASET_NOT_TRAINABLE`, `SNAPSHOT_NOT_FOUND`, `TRAINING_QUOTA_EXCEEDED`, and `DUPLICATE_TRAINING_REQUEST`.
+
+#### Training-request HTTP status mapping
+
+| HTTP status | Use |
+|---:|---|
+| `201` | Queued job created |
+| `400` | Malformed request body or invalid request DTO |
+| `401` | Missing authentication context |
+| `403` | Missing training permission |
+| `404` | Dataset definition or snapshot not found |
+| `409` | Equivalent training job already exists |
+| `422` | Dataset definition is not trainable |
+| `429` | Tenant training quota exhausted |
 
 ### Resolved training configuration
 
@@ -304,6 +336,8 @@ Lifecycle writes must be conditional on the current state. Worker progress, hear
 | `ValidationIssueDto` | Field-level validation issue |
 | `DatasetDefinitionErrorDto` | Dataset-definition error response |
 | `CreateTrainingJobDto` | Training request |
+| `TrainingJobRequestErrorCodeDto` | Training-request error codes: auth, validation, not-found, quota, duplicate |
+| `TrainingJobRequestErrorDto` | Training-request error response with field-level issues |
 | `TrainingJobStatusDto` | Job lifecycle states |
 | `ResolvedTrainingConfigDto` | Server-controlled training policy |
 | `TrainingJobErrorDto` | Structured job error |
@@ -385,7 +419,7 @@ Neither users nor the training worker provide this DTO. Nucleus generates and st
 
 ## Runtime contract validation
 
-Runtime validation tests are in `packages/contracts/src/contracts.test.ts`. They use TypeBox's runtime `Value.Check` validator and cover valid and invalid payloads across the dataset, training-job, worker-input, worker-result, generated-tool, and prediction contracts.
+Runtime validation tests are in `packages/contracts/src/<domain>/contracts.test.ts`, one file per contract area (dataset, training, model, tool, and inference). They use TypeBox's runtime `Value.Check` validator and cover valid and invalid payloads across the dataset, training-job, worker-input, worker-result, generated-tool, and prediction contracts.
 
 The tests specifically verify UUID and date-time formats, PostgreSQL identifiers, lowercase SHA-256 digests, numeric limits, unique required fields, rejection of additional properties, and consistency of the worker success/failure and prediction/rejection branches. Run them from the repository root with:
 

@@ -51,6 +51,53 @@ export const TrainingJobErrorDto = Type.Object(
 
 export type TrainingJobError = Static<typeof TrainingJobErrorDto>;
 
+export const TrainingJobRequestErrorCodeDto = Type.Union([
+  Type.Literal("UNAUTHENTICATED"),
+  Type.Literal("FORBIDDEN"),
+  Type.Literal("INVALID_TRAINING_REQUEST"),
+  Type.Literal("DATASET_DEFINITION_NOT_FOUND"),
+  Type.Literal("DATASET_NOT_TRAINABLE"),
+  Type.Literal("SNAPSHOT_NOT_FOUND"),
+  Type.Literal("TRAINING_QUOTA_EXCEEDED"),
+  Type.Literal("DUPLICATE_TRAINING_REQUEST"),
+]);
+
+export type TrainingJobRequestErrorCode = Static<
+  typeof TrainingJobRequestErrorCodeDto
+>;
+
+export const TrainingJobRequestErrorDto = Type.Object(
+  {
+    error: Type.Object(
+      {
+        code: TrainingJobRequestErrorCodeDto,
+        message: Type.String(),
+        issues: Type.Array(
+          Type.Object(
+            {
+              path: Type.String(),
+              message: Type.String(),
+            },
+            {
+              additionalProperties: false,
+            },
+          ),
+        ),
+      },
+      {
+        additionalProperties: false,
+      },
+    ),
+  },
+  {
+    additionalProperties: false,
+  },
+);
+
+export type TrainingJobRequestError = Static<
+  typeof TrainingJobRequestErrorDto
+>;
+
 export const TrainingJobResponseDto = Type.Object(
   {
     id: Type.String({ format: "uuid" }),

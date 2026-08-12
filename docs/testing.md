@@ -4,7 +4,7 @@ Ampersand has two Vitest suites: fast unit tests that need no external services 
 
 ## Unit tests
 
-The runtime contract-validation tests in `packages/contracts/src/contracts.test.ts` validate every shared DTO against valid and invalid payloads using TypeBox.
+The runtime contract-validation tests in `packages/contracts/src/<domain>/contracts.test.ts` validate each shared DTO area against valid and invalid payloads using TypeBox. The domain suites cover dataset, training, model, tool, and inference contracts.
 
 ```powershell
 bun run test

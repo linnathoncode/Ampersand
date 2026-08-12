@@ -5,6 +5,7 @@ import { hash, secondUuid, timestamp, uuid } from "../test-support";
 import {
   CreateTrainingJobDto,
   ResolvedTrainingConfigDto,
+  TrainingJobRequestErrorDto,
   TrainingJobResponseDto,
   TrainingWorkerInputDto,
   TrainingWorkerResultDto,
@@ -102,6 +103,41 @@ describe("training contracts", () => {
   it("accepts both worker-result branches", () => {
     expect(Value.Check(TrainingWorkerResultDto, workerSuccess)).toBe(true);
     expect(Value.Check(TrainingWorkerResultDto, workerFailure)).toBe(true);
+  });
+
+  it("accepts and rejects training request errors", () => {
+    expect(
+      Value.Check(TrainingJobRequestErrorDto, {
+        error: {
+          code: "DUPLICATE_TRAINING_REQUEST",
+          message: "An equivalent training job already exists",
+          issues: [],
+        },
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(TrainingJobRequestErrorDto, {
+        error: {
+          code: "DATASET_NOT_TRAINABLE",
+          message: "The dataset cannot be trained",
+          issues: [{ path: "features", message: "No features" }],
+        },
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(TrainingJobRequestErrorDto, {
+        error: {
+          code: "INVALID_TRAINING_REQUEST",
+          message: "The training job request is invalid",
+          issues: [{ path: "/datasetDefinitionId", message: "Invalid UUID" }],
+        },
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(TrainingJobRequestErrorDto, {
+        error: { code: "NOT_A_REAL_CODE", message: "nope", issues: [] },
+      }),
+    ).toBe(false);
   });
 
   it("rejects invalid job requests and malformed worker results", () => {
