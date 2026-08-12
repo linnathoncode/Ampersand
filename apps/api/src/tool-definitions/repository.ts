@@ -47,6 +47,13 @@ export type StoredToolDefinition = {
   generatedAt: Date;
 };
 
+export type StoredPredictionTool = {
+  id: string;
+  modelVersionId: string;
+  modelVersion: number;
+  inputSchema: unknown;
+};
+
 export async function listStoredModelFeatures(
   client: PoolClient,
   schemaName: string,
@@ -296,4 +303,39 @@ export async function listPublishedToolDefinitions(
       ),
     )
     .orderBy(asc(toolDefinitions.toolName));
+}
+
+export async function findPublishedToolByName(
+  client: PoolClient,
+  schemaName: string,
+  toolName: string,
+): Promise<StoredPredictionTool | null> {
+  const tenantSchema = pgSchema(schemaName);
+  const toolDefinitions = createToolDefinitionsForSchema(tenantSchema);
+  const modelVersions = createModelVersionsForSchema(tenantSchema);
+  const database = drizzle(client);
+
+  const rows = await database
+    .select({
+      id: toolDefinitions.id,
+      modelVersionId: toolDefinitions.modelVersionId,
+      modelVersion: modelVersions.versionNumber,
+      inputSchema: toolDefinitions.inputSchema,
+    })
+    .from(toolDefinitions)
+    .innerJoin(
+      modelVersions,
+      eq(toolDefinitions.modelVersionId, modelVersions.id),
+    )
+    .where(
+      and(
+        eq(toolDefinitions.toolName, toolName),
+        eq(toolDefinitions.isActive, true),
+        eq(modelVersions.isActive, true),
+        eq(modelVersions.status, "published"),
+      ),
+    )
+    .limit(1);
+
+  return rows[0] ?? null;
 }

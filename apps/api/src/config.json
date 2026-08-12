@@ -69,6 +69,12 @@
           "path": "tool_definitions",
           "method": "POST",
           "description": "Generate and store tool definitions"
+        },
+        {
+          "action": "invoke",
+          "path": "tool_definitions",
+          "method": "POST",
+          "description": "Invoke published prediction tools"
         }
       ],
       "roleClaimAssignments": [
@@ -83,6 +89,12 @@
           "role": "dataset-creator",
           "claims": [
             "create.dataset_definitions"
+          ]
+        },
+        {
+          "role": "basic",
+          "claims": [
+            "invoke.tool_definitions"
           ]
         }
       ]
