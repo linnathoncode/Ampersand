@@ -1,12 +1,9 @@
-pandas
-scikit-learn
-onnx
-onnxruntime
-skl2onnx
+# Private worker process foundation.
+# Development-only deps used by the worker suites are added as they are
+# needed (pandas, scikit-learn, onnx, onnxruntime, skl2onnx).
+# Redis is intentionally absent: PostgreSQL is the durable job queue.
 psycopg[binary]
-redis
 pydantic
 python-dotenv
 pytest
 pytest-cov
-

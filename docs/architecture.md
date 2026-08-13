@@ -51,7 +51,13 @@ PostgreSQL is the single source of truth for datasets, snapshots, training jobs,
 
 ### Worker
 
-The private Python worker claims jobs, freezes and validates data, performs time-based splitting, trains and evaluates models, sends heartbeats, exports ONNX artifacts, and reports structured results. It has no public endpoint and makes no authorization decisions.
+The private Python worker connects directly to PostgreSQL (the durable job
+queue) and never exposes a public endpoint. It never makes authorization
+decisions; all authority arrives as trusted job metadata. The worker validates
+its configuration, verifies PostgreSQL connectivity, and stays idle until
+`SIGTERM`/`SIGINT`. Transactional claiming with `FOR UPDATE SKIP LOCKED`,
+heartbeat progress, training and evaluation, ONNX export, and structured
+results are added incrementally.
 
 ### Artifact Storage
 

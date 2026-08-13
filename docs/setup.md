@@ -34,9 +34,28 @@ python -m venv .venv
 . .\scripts\activate-env.ps1
 python -m pip install --upgrade pip
 pip install -r services\worker\requirements.txt
+pip install -e services\worker
 ```
 
 The activation helper searches the current directory and its parents for `.venv`, so it also works from a subdirectory of the repository.
+
+Run the worker package from the repository root (or any parent of `.venv`):
+
+```powershell
+python -m worker
+```
+
+The worker loads its configuration from `.env` and from the `WORKER_*`
+variables documented in `.env.example`. The worker validates configuration,
+connects directly to PostgreSQL, confirms connectivity, and then stays idle
+until it receives `SIGTERM` or `SIGINT`. It does not claim or execute jobs
+yet; it never starts an HTTP server.
+
+To run the worker test suite:
+
+```powershell
+python -m pytest services\worker\tests
+```
 
 ## Local Infrastructure
 
