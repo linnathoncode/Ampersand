@@ -7,6 +7,10 @@ import {
   hasClaim,
   INVOKE_TOOL_CLAIM,
 } from "../auth/context";
+import { createFilesystemArtifactReader } from "../artifact-verification/filesystem-reader";
+import { verifyStoredModelArtifact } from "../artifact-verification/service";
+import { parseTrustedWorkerIds } from "../artifact-verification/trusted-workers";
+import type { ArtifactVerificationResult } from "../artifact-verification/verify-artifact";
 import { withTenantTransaction } from "../database/tenant-transaction";
 import { completeToolPrediction } from "./complete-prediction";
 import type { ModelInferenceResult } from "./create-response";
@@ -20,9 +24,15 @@ type AcceptedPrediction = Extract<
 
 type PredictionRouteDependencies = {
   validatePrediction: typeof validateToolPrediction;
+  verifyArtifact: (
+    client: PoolClient,
+    schemaName: string,
+    modelVersionId: string,
+  ) => Promise<ArtifactVerificationResult>;
   completePrediction: typeof completeToolPrediction;
   runInference?: (
     accepted: AcceptedPrediction,
+    artifactBytes: Uint8Array,
   ) => Promise<ModelInferenceResult>;
   withTransaction: <Result>(
     schemaName: string,
@@ -30,8 +40,23 @@ type PredictionRouteDependencies = {
   ) => Promise<Result>;
 };
 
+const trustedWorkerIds = parseTrustedWorkerIds(
+  process.env.TRUSTED_WORKER_IDS,
+);
+const readArtifact = createFilesystemArtifactReader(
+  process.env.ARTIFACT_STORAGE_PATH ?? "./artifacts",
+);
+
 const defaultDependencies: PredictionRouteDependencies = {
   validatePrediction: validateToolPrediction,
+  verifyArtifact: (client, schemaName, modelVersionId) =>
+    verifyStoredModelArtifact(
+      client,
+      schemaName,
+      modelVersionId,
+      trustedWorkerIds,
+      readArtifact,
+    ),
   completePrediction: completeToolPrediction,
   withTransaction: withTenantTransaction,
 };
@@ -104,7 +129,32 @@ export function createPredictionRoutes(
       };
     }
 
-    const inference = await dependencies.runInference(result);
+    const artifactVerification = await dependencies.withTransaction(
+      auth.schemaName,
+      (client) =>
+        dependencies.verifyArtifact(
+          client,
+          auth.schemaName,
+          result.modelVersionId,
+        ),
+    );
+
+    if (!artifactVerification.ok) {
+      set.status = 503;
+
+      return {
+        error: {
+          code: "MODEL_ARTIFACT_UNAVAILABLE",
+          reason: artifactVerification.reason,
+          message: "The verified model artifact is unavailable",
+        },
+      };
+    }
+
+    const inference = await dependencies.runInference(
+      result,
+      artifactVerification.bytes,
+    );
 
     return dependencies.withTransaction(
       auth.schemaName,

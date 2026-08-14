@@ -9,6 +9,7 @@ const { createPredictionRoutes, predictionRoutes } = await import("../routes");
 
 const predictionUrl = "http://localhost/predictions";
 const modelVersionId = "22222222-2222-4222-8222-222222222222";
+const verifiedArtifactBytes = new TextEncoder().encode("verified model");
 
 const validRequest = {
   toolName: "predict_energy_usage",
@@ -166,11 +167,20 @@ describe("prediction route", () => {
     const routes = createPredictionRoutes({
       withTransaction: runWithoutDatabase,
       validatePrediction: async () => accepted,
-      // Simulates future model execution without loading an ONNX artifact.
-      runInference: async () => ({
-        prediction: 124.6,
-        uncertainty: 3.2,
+      verifyArtifact: async () => ({
+        ok: true,
+        actualSha256: "0".repeat(64),
+        bytes: verifiedArtifactBytes,
       }),
+      // Simulates future model execution without loading an ONNX artifact.
+      runInference: async (_accepted, artifactBytes) => {
+        expect(artifactBytes).toBe(verifiedArtifactBytes);
+
+        return {
+          prediction: 124.6,
+          uncertainty: 3.2,
+        };
+      },
       completePrediction: async (_client, schemaName, createdBy, input) => {
         expect(schemaName).toBe("tenant_ampersand_dev");
         expect(createdBy).toBe(authorizedHeaders["x-user-id"]);
@@ -198,6 +208,49 @@ describe("prediction route", () => {
 
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual(completedResponse);
+  });
+
+  test("does not run inference when artifact verification fails", async () => {
+    let inferenceAttempted = false;
+
+    const routes = createPredictionRoutes({
+      withTransaction: runWithoutDatabase,
+      validatePrediction: async () => ({
+        kind: "accepted",
+        toolDefinitionId: "33333333-3333-4333-8333-333333333333",
+        modelVersionId,
+        modelVersion: 1,
+        inputs: validRequest.inputs,
+        warnings: [],
+      }),
+      verifyArtifact: async () => ({
+        ok: false,
+        reason: "CHECKSUM_MISMATCH",
+        message: "internal verification detail",
+      }),
+      runInference: async () => {
+        inferenceAttempted = true;
+        return { prediction: 1, uncertainty: null };
+      },
+    });
+
+    const response = await routes.handle(
+      new Request(predictionUrl, {
+        method: "POST",
+        headers: authorizedHeaders,
+        body: JSON.stringify(validRequest),
+      }),
+    );
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({
+      error: {
+        code: "MODEL_ARTIFACT_UNAVAILABLE",
+        reason: "CHECKSUM_MISMATCH",
+        message: "The verified model artifact is unavailable",
+      },
+    });
+    expect(inferenceAttempted).toBe(false);
   });
 
   test("rejects a malformed request body", async () => {
