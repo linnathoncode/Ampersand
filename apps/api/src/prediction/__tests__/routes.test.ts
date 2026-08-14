@@ -10,6 +10,15 @@ const { createPredictionRoutes, predictionRoutes } = await import("../routes");
 const predictionUrl = "http://localhost/predictions";
 const modelVersionId = "22222222-2222-4222-8222-222222222222";
 const verifiedArtifactBytes = new TextEncoder().encode("verified model");
+const onnxFeatures = [
+  {
+    name: "temperature",
+    position: 0,
+    dataType: "number" as const,
+    isRequired: true,
+    allowedValues: null,
+  },
+];
 
 const validRequest = {
   toolName: "predict_energy_usage",
@@ -112,7 +121,7 @@ describe("prediction route", () => {
     expect(await response.json()).toEqual(rejectedResponse);
   });
 
-  test("hands authorized valid input to the future inference stage", async () => {
+  test("rejects a model without active input features", async () => {
     const routes = createPredictionRoutes({
       withTransaction: runWithoutDatabase,
       validatePrediction: async () => ({
@@ -123,6 +132,12 @@ describe("prediction route", () => {
         inputs: validRequest.inputs,
         warnings: [],
       }),
+      verifyArtifact: async () => ({
+        ok: true,
+        actualSha256: "0".repeat(64),
+        bytes: verifiedArtifactBytes,
+      }),
+      listFeatures: async () => [],
     });
 
     const response = await routes.handle(
@@ -133,11 +148,11 @@ describe("prediction route", () => {
       }),
     );
 
-    expect(response.status).toBe(501);
+    expect(response.status).toBe(503);
     expect(await response.json()).toEqual({
       error: {
-        code: "INFERENCE_NOT_IMPLEMENTED",
-        message: "Inputs are valid, but model inference is not implemented",
+        code: "MODEL_FEATURES_UNAVAILABLE",
+        message: "The model does not define any active input features",
       },
     });
   });
@@ -172,9 +187,12 @@ describe("prediction route", () => {
         actualSha256: "0".repeat(64),
         bytes: verifiedArtifactBytes,
       }),
+      listFeatures: async () => onnxFeatures,
       // Simulates future model execution without loading an ONNX artifact.
-      runInference: async (_accepted, artifactBytes) => {
-        expect(artifactBytes).toBe(verifiedArtifactBytes);
+      runInference: async (input) => {
+        expect(input.artifactBytes).toBe(verifiedArtifactBytes);
+        expect(input.features).toEqual(onnxFeatures);
+        expect(input.inputs).toEqual(accepted.inputs);
 
         return {
           prediction: 124.6,
@@ -251,6 +269,45 @@ describe("prediction route", () => {
       },
     });
     expect(inferenceAttempted).toBe(false);
+  });
+
+  test("returns a safe error when ONNX inference fails", async () => {
+    const routes = createPredictionRoutes({
+      withTransaction: runWithoutDatabase,
+      validatePrediction: async () => ({
+        kind: "accepted",
+        toolDefinitionId: "33333333-3333-4333-8333-333333333333",
+        modelVersionId,
+        modelVersion: 1,
+        inputs: validRequest.inputs,
+        warnings: [],
+      }),
+      verifyArtifact: async () => ({
+        ok: true,
+        actualSha256: "0".repeat(64),
+        bytes: verifiedArtifactBytes,
+      }),
+      listFeatures: async () => onnxFeatures,
+      runInference: async () => {
+        throw new Error("native runtime detail");
+      },
+    });
+
+    const response = await routes.handle(
+      new Request(predictionUrl, {
+        method: "POST",
+        headers: authorizedHeaders,
+        body: JSON.stringify(validRequest),
+      }),
+    );
+
+    expect(response.status).toBe(500);
+    expect(await response.json()).toEqual({
+      error: {
+        code: "MODEL_INFERENCE_FAILED",
+        message: "The model could not produce a prediction",
+      },
+    });
   });
 
   test("rejects a malformed request body", async () => {

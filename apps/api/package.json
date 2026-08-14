@@ -24,6 +24,7 @@
     "elysia": "1.4.29",
     "ioredis": "5.11.1",
     "nucleus-core-ts": "0.9.805",
+    "onnxruntime-node": "^1.27.0",
     "parquet-wasm": "^0.7.2",
     "pg": "8.22.0"
   },

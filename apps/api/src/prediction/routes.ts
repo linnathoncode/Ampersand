@@ -14,6 +14,8 @@ import type { ArtifactVerificationResult } from "../artifact-verification/verify
 import { withTenantTransaction } from "../database/tenant-transaction";
 import { completeToolPrediction } from "./complete-prediction";
 import type { ModelInferenceResult } from "./create-response";
+import { listOnnxFeatures } from "./onnx/repository";
+import { runOnnxInference } from "./onnx/run-inference";
 import { validateToolPrediction } from "./service";
 import type { ValidateToolPredictionResult } from "./service";
 
@@ -29,11 +31,9 @@ type PredictionRouteDependencies = {
     schemaName: string,
     modelVersionId: string,
   ) => Promise<ArtifactVerificationResult>;
+  listFeatures: typeof listOnnxFeatures;
   completePrediction: typeof completeToolPrediction;
-  runInference?: (
-    accepted: AcceptedPrediction,
-    artifactBytes: Uint8Array,
-  ) => Promise<ModelInferenceResult>;
+  runInference: typeof runOnnxInference;
   withTransaction: <Result>(
     schemaName: string,
     operation: (client: PoolClient) => Promise<Result>,
@@ -57,6 +57,8 @@ const defaultDependencies: PredictionRouteDependencies = {
       trustedWorkerIds,
       readArtifact,
     ),
+  listFeatures: listOnnxFeatures,
+  runInference: runOnnxInference,
   completePrediction: completeToolPrediction,
   withTransaction: withTenantTransaction,
 };
@@ -118,17 +120,6 @@ export function createPredictionRoutes(
       return result.body;
     }
 
-    if (!dependencies.runInference) {
-      set.status = 501;
-
-      return {
-        error: {
-          code: "INFERENCE_NOT_IMPLEMENTED",
-          message: "Inputs are valid, but model inference is not implemented",
-        },
-      };
-    }
-
     const artifactVerification = await dependencies.withTransaction(
       auth.schemaName,
       (client) =>
@@ -151,10 +142,45 @@ export function createPredictionRoutes(
       };
     }
 
-    const inference = await dependencies.runInference(
-      result,
-      artifactVerification.bytes,
+    const features = await dependencies.withTransaction(
+      auth.schemaName,
+      (client) =>
+        dependencies.listFeatures(
+          client,
+          auth.schemaName,
+          result.modelVersionId,
+        ),
     );
+
+    if (features.length === 0) {
+      set.status = 503;
+
+      return {
+        error: {
+          code: "MODEL_FEATURES_UNAVAILABLE",
+          message: "The model does not define any active input features",
+        },
+      };
+    }
+
+    let inference: ModelInferenceResult;
+
+    try {
+      inference = await dependencies.runInference({
+        artifactBytes: artifactVerification.bytes,
+        features,
+        inputs: result.inputs,
+      });
+    } catch {
+      set.status = 500;
+
+      return {
+        error: {
+          code: "MODEL_INFERENCE_FAILED",
+          message: "The model could not produce a prediction",
+        },
+      };
+    }
 
     return dependencies.withTransaction(
       auth.schemaName,
