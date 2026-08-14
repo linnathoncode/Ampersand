@@ -20,6 +20,7 @@ from .errors import (
 
 DEFAULT_POLL_INTERVAL_SECONDS = 5
 DEFAULT_HEARTBEAT_INTERVAL_SECONDS = 10
+DEFAULT_CLAIM_TIMEOUT_SECONDS = 120
 DEFAULT_ARTIFACT_STORAGE_PATH = "./artifacts"
 DEFAULT_LOG_LEVEL = "INFO"
 
@@ -37,6 +38,7 @@ class WorkerConfig:
     heartbeat_interval_seconds: int
     artifact_storage_path: str
     log_level: str
+    claim_timeout_seconds: int = DEFAULT_CLAIM_TIMEOUT_SECONDS
 
     @classmethod
     def from_env(
@@ -54,6 +56,11 @@ class WorkerConfig:
             "WORKER_HEARTBEAT_INTERVAL_SECONDS",
             DEFAULT_HEARTBEAT_INTERVAL_SECONDS,
         )
+        claim_timeout_seconds = _positive_int(
+            values,
+            "WORKER_CLAIM_TIMEOUT_SECONDS",
+            DEFAULT_CLAIM_TIMEOUT_SECONDS,
+        )
         artifact_storage_path = _require_non_empty(
             values,
             "ARTIFACT_STORAGE_PATH",
@@ -66,6 +73,7 @@ class WorkerConfig:
             worker_id=worker_id,
             poll_interval_seconds=poll_interval_seconds,
             heartbeat_interval_seconds=heartbeat_interval_seconds,
+            claim_timeout_seconds=claim_timeout_seconds,
             artifact_storage_path=artifact_storage_path,
             log_level=log_level,
         )

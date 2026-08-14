@@ -66,3 +66,27 @@ class WorkerStartupError(WorkerError):
     """The worker failed before entering its idle runtime loop."""
 
     code = "STARTUP"
+
+
+class InvalidTenantSchemaError(WorkerError):
+    """A PostgreSQL schema name is unsafe to use as a tenant search path."""
+
+    code = "INVALID_TENANT_SCHEMA"
+
+
+class InvalidJobTransitionError(WorkerError):
+    """A job tried to move between states that are not allowed."""
+
+    code = "INVALID_JOB_TRANSITION"
+
+
+class JobOwnershipError(WorkerError):
+    """A worker tried to update a job it does not own."""
+
+    code = "JOB_OWNERSHIP"
+
+
+class JobStateConflictError(WorkerError):
+    """A job exists but is not in the expected state for the update."""
+
+    code = "JOB_STATE_CONFLICT"

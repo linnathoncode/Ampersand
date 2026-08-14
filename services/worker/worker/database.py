@@ -1,16 +1,97 @@
 """Direct PostgreSQL access for the private worker.
 
 The worker connects straight to PostgreSQL (the durable job queue) and must
-never expose a public HTTP endpoint. This module only manages connectivity
-and health checks; job claiming with ``FOR UPDATE SKIP LOCKED`` is added
-incrementally. The connection string is never included in error messages.
+never expose a public HTTP endpoint. This module manages connectivity, health
+checks, and job claiming with ``FOR UPDATE SKIP LOCKED``. Tenant data lives in
+per-tenant schemas, so every job operation runs inside a transaction scoped to
+one validated tenant schema. The connection string is never included in error
+messages.
 """
 
 from __future__ import annotations
 
-from .errors import DatabaseConnectionError, WorkerError
+import re
+from dataclasses import dataclass
+
+from .errors import (
+    DatabaseConnectionError,
+    InvalidJobTransitionError,
+    InvalidTenantSchemaError,
+    JobOwnershipError,
+    JobStateConflictError,
+    WorkerError,
+)
+from .job_state import (
+    assert_worker_owned_transition,
+    is_terminal_job_status,
+)
 
 _CONNECT_TIMEOUT_SECONDS = 2
+
+_TENANT_SCHEMA_PATTERN = re.compile(r"^[a-z_][a-z0-9_]*$")
+
+CLAIMED_TRAINING_JOB_PROGRESS_MESSAGE = "Training job claimed; preparing data"
+
+_TENANT_SCHEMAS_SQL = (
+    "SELECT schema_name FROM main.tenants "
+    "WHERE status = 'active' ORDER BY schema_name"
+)
+
+_CLAIM_JOB_SQL = """
+    WITH candidate AS (
+        SELECT id
+        FROM training_jobs
+        WHERE status = 'queued' AND is_active = true
+        ORDER BY queued_at, id
+        FOR UPDATE SKIP LOCKED
+        LIMIT 1
+    )
+    UPDATE training_jobs AS tj
+    SET status = 'running',
+        claimed_by = %(worker_id)s,
+        started_at = now(),
+        heartbeat_at = now(),
+        progress_percent = 0,
+        progress_message = %(message)s,
+        updated_at = now()
+    FROM candidate
+    WHERE tj.id = candidate.id
+      AND tj.status = 'queued'
+    RETURNING tj.id, tj.fingerprint, tj.dataset_snapshot_id,
+              tj.training_config, tj.max_runtime_seconds
+"""
+
+_TRANSITION_JOB_SQL = """
+    UPDATE training_jobs
+    SET status = %(next_status)s,
+        progress_percent = %(progress_percent)s,
+        progress_message = %(progress_message)s,
+        error_code = %(error_code)s,
+        error_message = %(error_message)s,
+        heartbeat_at = now(),
+        finished_at = CASE
+            WHEN %(is_terminal)s THEN now() ELSE finished_at END,
+        updated_at = now()
+    WHERE id = %(job_id)s
+      AND claimed_by = %(worker_id)s
+      AND status = %(current_status)s
+"""
+
+_LOOKUP_JOB_SQL = (
+    "SELECT status, claimed_by FROM training_jobs WHERE id = %(job_id)s"
+)
+
+
+@dataclass(frozen=True)
+class ClaimedJob:
+    """A job row locked and moved to ``running`` by one worker."""
+
+    id: str
+    fingerprint: str
+    dataset_snapshot_id: str | None
+    training_config: object
+    max_runtime_seconds: int
+    schema_name: str
 
 
 class Database:
@@ -41,9 +122,7 @@ class Database:
             ) from exc
 
     def ping(self) -> None:
-        connection = self._connection
-        if connection is None:
-            raise DatabaseConnectionError("Not connected to PostgreSQL")
+        connection = self._require_connection()
         try:
             # psycopg does not autocommit by default, so an explicit
             # short-lived transaction guarantees the health check commits or
@@ -51,10 +130,150 @@ class Database:
             with connection.transaction():
                 with connection.cursor() as cursor:
                     cursor.execute("SELECT 1")
+        except DatabaseConnectionError:
+            raise
         except Exception as exc:
             raise DatabaseConnectionError(
                 "PostgreSQL connection check failed"
             ) from exc
+
+    def active_tenant_schemas(self) -> list[str]:
+        """Return the validated active tenant schema names from the registry."""
+        connection = self._require_connection()
+        try:
+            with connection.transaction():
+                with connection.cursor() as cursor:
+                    cursor.execute(_TENANT_SCHEMAS_SQL)
+                    schemas = [row[0] for row in cursor.fetchall()]
+        except DatabaseConnectionError:
+            raise
+        except Exception as exc:
+            raise DatabaseConnectionError(
+                "Failed to list active tenant schemas"
+            ) from exc
+
+        for schema in schemas:
+            _assert_tenant_schema_name(schema)
+        return schemas
+
+    def claim_next_job(self, worker_id: str, schema_name: str) -> ClaimedJob | None:
+        """Atomically claim one queued job in a tenant schema.
+
+        Returns ``None`` when the tenant queue is empty. Concurrent workers
+        cannot claim the same row because the candidate rows are locked with
+        ``FOR UPDATE SKIP LOCKED`` inside a single transaction.
+        """
+        _assert_tenant_schema_name(schema_name)
+        connection = self._require_connection()
+        try:
+            with connection.transaction():
+                with connection.cursor() as cursor:
+                    _scope_tenant(cursor, schema_name)
+                    cursor.execute(
+                        _CLAIM_JOB_SQL,
+                        {
+                            "worker_id": worker_id,
+                            "message": CLAIMED_TRAINING_JOB_PROGRESS_MESSAGE,
+                        },
+                    )
+                    row = cursor.fetchone()
+                    if row is None:
+                        return None
+                    return ClaimedJob(
+                        id=row[0],
+                        fingerprint=row[1],
+                        dataset_snapshot_id=row[2],
+                        training_config=row[3],
+                        max_runtime_seconds=row[4],
+                        schema_name=schema_name,
+                    )
+        except DatabaseConnectionError:
+            raise
+        except Exception as exc:
+            raise DatabaseConnectionError(
+                "Failed to claim a training job"
+            ) from exc
+
+    def transition_job(
+        self,
+        *,
+        worker_id: str,
+        schema_name: str,
+        job_id: str,
+        current_status: str,
+        next_status: str,
+        progress_percent: int,
+        progress_message: str,
+        error_code: str | None = None,
+        error_message: str | None = None,
+    ) -> None:
+        """Move a claimed job between allowed states.
+
+        The transition must be valid in the lifecycle and owned by the worker,
+        so Nucleus-owned moves such as ``running -> cancelled`` or
+        ``running -> dead`` are rejected before any SQL runs. The update is
+        then conditional on the job being owned by ``worker_id`` and currently
+        in ``current_status``, so a stale or foreign worker can never mutate
+        the job. Terminal states reject every transition before any SQL runs.
+        """
+        assert_worker_owned_transition(current_status, next_status)
+        _assert_tenant_schema_name(schema_name)
+        connection = self._require_connection()
+        try:
+            with connection.transaction():
+                with connection.cursor() as cursor:
+                    _scope_tenant(cursor, schema_name)
+                    cursor.execute(
+                        _TRANSITION_JOB_SQL,
+                        {
+                            "worker_id": worker_id,
+                            "job_id": job_id,
+                            "current_status": current_status,
+                            "next_status": next_status,
+                            "is_terminal": is_terminal_job_status(next_status),
+                            "progress_percent": progress_percent,
+                            "progress_message": progress_message,
+                            "error_code": error_code,
+                            "error_message": error_message,
+                        },
+                    )
+                    if cursor.rowcount == 0:
+                        self._raise_conflict(cursor, job_id, current_status)
+        except (
+            DatabaseConnectionError,
+            InvalidJobTransitionError,
+            JobOwnershipError,
+            JobStateConflictError,
+        ):
+            raise
+        except Exception as exc:
+            raise DatabaseConnectionError(
+                "Failed to update the training job"
+            ) from exc
+
+    def _raise_conflict(
+        self, cursor, job_id: str, current_status: str
+    ) -> None:
+        cursor.execute(_LOOKUP_JOB_SQL, {"job_id": job_id})
+        row = cursor.fetchone()
+        if row is None:
+            raise JobOwnershipError(f"training job '{job_id}' was not found")
+        actual_status, claimed_by = row
+        if actual_status != current_status:
+            raise JobStateConflictError(
+                f"training job '{job_id}' is in status '{actual_status}', "
+                f"expected '{current_status}'"
+            )
+        raise JobOwnershipError(
+            f"training job '{job_id}' is claimed by '{claimed_by}', "
+            "not by this worker"
+        )
+
+    def _require_connection(self):
+        connection = self._connection
+        if connection is None:
+            raise DatabaseConnectionError("Not connected to PostgreSQL")
+        return connection
 
     def close(self) -> None:
         connection = self._connection
@@ -64,3 +283,16 @@ class Database:
                 connection.close()
             except Exception:
                 pass
+
+
+def _scope_tenant(cursor, schema_name: str) -> None:
+    # The schema name is validated before this call, so inline quoting is safe
+    # and the tenant queue is only reachable through its own search path.
+    cursor.execute(f'SET LOCAL search_path TO "{schema_name}"')
+
+
+def _assert_tenant_schema_name(schema_name: str) -> None:
+    if _TENANT_SCHEMA_PATTERN.fullmatch(schema_name) is None:
+        raise InvalidTenantSchemaError(
+            f"unsafe PostgreSQL schema identifier: {schema_name}"
+        )

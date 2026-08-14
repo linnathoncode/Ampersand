@@ -26,6 +26,12 @@ class StubDatabase(Database):
     def close(self):
         self.closed = True
 
+    def active_tenant_schemas(self):
+        return []
+
+    def claim_next_job(self, worker_id, schema_name):
+        return None
+
 
 def make_config():
     return WorkerConfig(

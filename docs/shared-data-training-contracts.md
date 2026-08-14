@@ -317,6 +317,12 @@ queued -> running -> succeeded
 | `running -> cancelled` | Nucleus |
 | `running -> dead` | Nucleus |
 
+The lifecycle transition map includes both Nucleus- and worker-owned moves.
+Worker-side validation must represent the complete map (for parity with the
+shared contract) while separately rejecting transitions owned by Nucleus, so
+the worker can never perform `queued -> cancelled`, `running -> cancelled`, or
+`running -> dead`.
+
 The worker heartbeat interval is 10 seconds. Nucleus may mark a running job dead after 30 seconds without a heartbeat. `succeeded`, `failed`, `cancelled`, and `dead` are terminal states and have no outgoing transitions.
 
 Lifecycle writes must be conditional on the current state. Worker progress, heartbeat, success, and failure updates must also match the claiming worker so a cancelled or dead job cannot later be overwritten by a stale worker.
