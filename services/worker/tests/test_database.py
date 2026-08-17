@@ -7,6 +7,7 @@ from worker.errors import (
     InvalidTenantSchemaError,
     JobOwnershipError,
     JobStateConflictError,
+    SnapshotNotFoundError,
 )
 
 CONNECTION_STRING = "postgresql://ampersand:s3cret@localhost:5432/ampersand"
@@ -424,3 +425,173 @@ class TestTransitionJob:
             self._transition(database, schema_name="bad; DROP TABLE")
 
         assert connection.events == []
+
+
+def context_row(*, column_name, role, data_type, is_nullable, position):
+    return (
+        "job-1",
+        "a" * 64,
+        {"algorithmPolicy": "automatic-regression"},
+        60,
+        "snap-1",
+        "snapshot.parquet",
+        "parquet",
+        "b" * 64,
+        5,
+        "def-1",
+        SAFE_SCHEMA,
+        "energy_readings",
+        "energy_usage",
+        "recorded_at",
+        column_name,
+        role,
+        data_type,
+        is_nullable,
+        position,
+    )
+
+
+CONTEXT_COLUMN_ROWS = [
+    context_row(column_name="temperature", role="feature", data_type="number", is_nullable=False, position=0),
+    context_row(column_name="occupancy", role="feature", data_type="integer", is_nullable=False, position=1),
+    context_row(column_name="energy_usage", role="target", data_type="number", is_nullable=False, position=2),
+    context_row(column_name="recorded_at", role="time", data_type="datetime", is_nullable=False, position=3),
+]
+
+
+class TestLoadJobExecutionContext:
+    def test_loads_snapshot_and_dataset_metadata(self):
+        connection = FakeConnection(
+            responses={"JOIN dataset_snapshots": {"rows": CONTEXT_COLUMN_ROWS}}
+        )
+        database = make_database(connection)
+
+        context = database.load_job_execution_context(
+            "worker-a", SAFE_SCHEMA, "job-1"
+        )
+
+        assert context.job_id == "job-1"
+        assert context.job_fingerprint == "a" * 64
+        assert context.snapshot_uri == "snapshot.parquet"
+        assert context.snapshot_content_sha256 == "b" * 64
+        assert context.snapshot_row_count == 5
+        assert context.dataset_definition_id == "def-1"
+        assert context.time_column == "recorded_at"
+        assert [column.name for column in context.columns] == [
+            "temperature",
+            "occupancy",
+            "energy_usage",
+            "recorded_at",
+        ]
+        assert connection.events[-1] == "transaction_commit"
+        assert connection.in_transaction is False
+
+    def test_uses_tenant_search_path(self):
+        connection = FakeConnection(
+            responses={"JOIN dataset_snapshots": {"rows": CONTEXT_COLUMN_ROWS}}
+        )
+        database = make_database(connection)
+
+        database.load_job_execution_context("worker-a", SAFE_SCHEMA, "job-1")
+
+        sql = executed_sql(connection)
+        assert any(
+            f'SET LOCAL search_path TO "{SAFE_SCHEMA}"' in statement
+            for statement in sql
+        )
+
+    def test_missing_context_with_wrong_owner_raises(self):
+        connection = FakeConnection(
+            responses={
+                "JOIN dataset_snapshots": {"rows": [], "rowcount": 0},
+                "SELECT status, claimed_by": {
+                    "rows": [("running", "worker-b")],
+                    "rowcount": 1,
+                },
+            }
+        )
+        database = make_database(connection)
+
+        with pytest.raises(JobOwnershipError):
+            database.load_job_execution_context(
+                "worker-a", SAFE_SCHEMA, "job-1"
+            )
+
+    def test_missing_snapshot_raises_structured_error(self):
+        connection = FakeConnection(
+            responses={
+                "JOIN dataset_snapshots": {"rows": [], "rowcount": 0},
+                "SELECT status, claimed_by": {
+                    "rows": [("running", "worker-a")],
+                    "rowcount": 1,
+                },
+            }
+        )
+        database = make_database(connection)
+
+        with pytest.raises(SnapshotNotFoundError):
+            database.load_job_execution_context(
+                "worker-a", SAFE_SCHEMA, "job-1"
+            )
+
+class TestUpdateJobProgress:
+    def test_progress_update_commits(self):
+        connection = FakeConnection(
+            responses={"UPDATE training_jobs": {"rowcount": 1}}
+        )
+        database = make_database(connection)
+
+        database.update_job_progress(
+            worker_id="worker-a",
+            schema_name=SAFE_SCHEMA,
+            job_id="job-1",
+            progress_percent=50,
+            progress_message="validating",
+        )
+
+        sql = executed_sql(connection)
+        assert any("UPDATE training_jobs" in statement for statement in sql)
+        assert connection.events[-1] == "transaction_commit"
+        assert connection.in_transaction is False
+
+    def test_wrong_worker_raises_ownership_error(self):
+        connection = FakeConnection(
+            responses={
+                "UPDATE training_jobs": {"rowcount": 0},
+                "SELECT status, claimed_by": {
+                    "rows": [("running", "worker-b")],
+                    "rowcount": 1,
+                },
+            }
+        )
+        database = make_database(connection)
+
+        with pytest.raises(JobOwnershipError):
+            database.update_job_progress(
+                worker_id="worker-a",
+                schema_name=SAFE_SCHEMA,
+                job_id="job-1",
+                progress_percent=50,
+                progress_message="validating",
+            )
+
+    def test_terminal_job_conflict_raises(self):
+        connection = FakeConnection(
+            responses={
+                "UPDATE training_jobs": {"rowcount": 0},
+                "SELECT status, claimed_by": {
+                    "rows": [("cancelled", "worker-a")],
+                    "rowcount": 1,
+                },
+            }
+        )
+        database = make_database(connection)
+
+        with pytest.raises(JobStateConflictError):
+            database.update_job_progress(
+                worker_id="worker-a",
+                schema_name=SAFE_SCHEMA,
+                job_id="job-1",
+                progress_percent=50,
+                progress_message="validating",
+            )

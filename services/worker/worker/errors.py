@@ -90,3 +90,105 @@ class JobStateConflictError(WorkerError):
     """A job exists but is not in the expected state for the update."""
 
     code = "JOB_STATE_CONFLICT"
+
+
+class JobRuntimeExceededError(WorkerError):
+    """A claimed job exceeded its server-controlled runtime limit."""
+
+    code = "JOB_RUNTIME_EXCEEDED"
+
+
+class SnapshotError(WorkerError):
+    """Base class for snapshot artifact and dataset validation failures."""
+
+    code = "SNAPSHOT_ERROR"
+
+
+class SnapshotNotFoundError(SnapshotError):
+    """The referenced snapshot artifact is missing or unreachable."""
+
+    code = "SNAPSHOT_NOT_FOUND"
+
+
+class SnapshotChecksumMismatchError(SnapshotError):
+    """The snapshot artifact digest does not match the trusted checksum."""
+
+    code = "SNAPSHOT_CHECKSUM_MISMATCH"
+
+
+class SnapshotSizeExceededError(SnapshotError):
+    """The snapshot artifact is larger than the configured limit."""
+
+    code = "SNAPSHOT_SIZE_EXCEEDED"
+
+
+class SnapshotArtifactInvalidError(SnapshotError):
+    """The snapshot artifact is not a readable Parquet file."""
+
+    code = "SNAPSHOT_ARTIFACT_INVALID"
+
+
+class SnapshotRowCountExceededError(SnapshotError):
+    """The snapshot contains more rows than the configured limit."""
+
+    code = "SNAPSHOT_ROW_COUNT_EXCEEDED"
+
+
+class SnapshotRowCountMismatchError(SnapshotError):
+    """The snapshot row count differs from the trusted metadata."""
+
+    code = "SNAPSHOT_ROW_COUNT_MISMATCH"
+
+
+class SnapshotEmptyError(SnapshotError):
+    """The snapshot contains no rows."""
+
+    code = "SNAPSHOT_EMPTY_TABLE"
+
+
+class SnapshotColumnMissingError(SnapshotError):
+    """A trusted dataset column is absent from the snapshot."""
+
+    code = "SNAPSHOT_COLUMN_MISSING"
+
+
+class SnapshotColumnOrderInvalidError(SnapshotError):
+    """The snapshot columns are not in the trusted order."""
+
+    code = "SNAPSHOT_COLUMN_ORDER_INVALID"
+
+
+class SnapshotColumnTypeInvalidError(SnapshotError):
+    """A snapshot column type does not match the trusted dataset column."""
+
+    code = "SNAPSHOT_COLUMN_TYPE_INVALID"
+
+
+class SnapshotTargetInvalidError(SnapshotError):
+    """The training target is missing or not numeric."""
+
+    code = "SNAPSHOT_TARGET_INVALID"
+
+
+class SnapshotTimeColumnInvalidError(SnapshotError):
+    """The configured time column is missing or not a datetime column."""
+
+    code = "SNAPSHOT_TIME_COLUMN_INVALID"
+
+
+class SnapshotNullabilityInvalidError(SnapshotError):
+    """A non-nullable column contains missing values."""
+
+    code = "SNAPSHOT_NULLABILITY_INVALID"
+
+
+class SnapshotNonFiniteValueError(SnapshotError):
+    """A numeric snapshot value is NaN or infinite."""
+
+    code = "SNAPSHOT_NON_FINITE_VALUE"
+
+
+class SnapshotCategoryCardinalityExceededError(SnapshotError):
+    """A category snapshot column exceeds the unique-value safety bound."""
+
+    code = "SNAPSHOT_CATEGORY_CARDINALITY_EXCEEDED"

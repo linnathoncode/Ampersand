@@ -7,7 +7,7 @@ import time
 import pytest
 
 import worker
-from worker.__main__ import main
+from worker.__main__ import create_lifecycle, main
 from worker.config import WorkerConfig
 from worker.database import Database
 
@@ -79,3 +79,9 @@ class TestEntrypoint:
     def test_no_http_server_is_started(self):
         for name in ("http.server", "uvicorn", "flask", "aiohttp", "starlette"):
             assert name not in sys.modules, f"{name} must not be imported"
+
+    def test_lifecycle_wires_a_job_handler(self):
+        database = StubDatabase()
+        lifecycle = create_lifecycle(make_config(), database)
+        assert lifecycle._job_handler is not None
+        assert callable(lifecycle._job_handler)

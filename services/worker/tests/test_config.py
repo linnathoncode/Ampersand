@@ -6,6 +6,8 @@ from worker.config import (
     DEFAULT_ARTIFACT_STORAGE_PATH,
     DEFAULT_CLAIM_TIMEOUT_SECONDS,
     DEFAULT_HEARTBEAT_INTERVAL_SECONDS,
+    DEFAULT_MAX_SNAPSHOT_BYTES,
+    DEFAULT_MAX_SNAPSHOT_ROWS,
     DEFAULT_POLL_INTERVAL_SECONDS,
     WorkerConfig,
 )
@@ -45,6 +47,16 @@ class TestConfigLoading:
         assert config.artifact_storage_path == "/tmp/ampersand-artifacts"
         assert config.log_level == "INFO"
 
+    def test_snapshot_limits_loaded(self):
+        config = WorkerConfig.from_env(
+            base_env(
+                WORKER_MAX_SNAPSHOT_BYTES="1048576",
+                WORKER_MAX_SNAPSHOT_ROWS="50000",
+            )
+        )
+        assert config.max_snapshot_bytes == 1048576
+        assert config.max_snapshot_rows == 50000
+
     def test_defaults_applied_for_optional_values(self):
         config = WorkerConfig.from_env(
             base_env(
@@ -53,6 +65,8 @@ class TestConfigLoading:
                 WORKER_CLAIM_TIMEOUT_SECONDS=None,
                 ARTIFACT_STORAGE_PATH=None,
                 WORKER_LOG_LEVEL=None,
+                WORKER_MAX_SNAPSHOT_BYTES=None,
+                WORKER_MAX_SNAPSHOT_ROWS=None,
             )
         )
         assert config.poll_interval_seconds == DEFAULT_POLL_INTERVAL_SECONDS
@@ -65,6 +79,8 @@ class TestConfigLoading:
         )
         assert config.artifact_storage_path == DEFAULT_ARTIFACT_STORAGE_PATH
         assert config.log_level == "INFO"
+        assert config.max_snapshot_bytes == DEFAULT_MAX_SNAPSHOT_BYTES
+        assert config.max_snapshot_rows == DEFAULT_MAX_SNAPSHOT_ROWS
 
     def test_custom_claim_timeout_accepted(self):
         config = WorkerConfig.from_env(
@@ -107,6 +123,12 @@ class TestConfigErrors:
                 base_env(WORKER_CLAIM_TIMEOUT_SECONDS=raw)
             )
         assert excinfo.value.variable == "WORKER_CLAIM_TIMEOUT_SECONDS"
+
+    @pytest.mark.parametrize("variable", ["WORKER_MAX_SNAPSHOT_BYTES", "WORKER_MAX_SNAPSHOT_ROWS"])
+    def test_invalid_snapshot_limits_rejected(self, variable):
+        with pytest.raises(InvalidEnvironmentValueError) as excinfo:
+            WorkerConfig.from_env(base_env(**{variable: "0"}))
+        assert excinfo.value.variable == variable
 
     def test_invalid_log_level_rejected(self):
         with pytest.raises(InvalidEnvironmentValueError) as excinfo:

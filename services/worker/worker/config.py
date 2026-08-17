@@ -22,6 +22,8 @@ DEFAULT_POLL_INTERVAL_SECONDS = 5
 DEFAULT_HEARTBEAT_INTERVAL_SECONDS = 10
 DEFAULT_CLAIM_TIMEOUT_SECONDS = 120
 DEFAULT_ARTIFACT_STORAGE_PATH = "./artifacts"
+DEFAULT_MAX_SNAPSHOT_BYTES = 512 * 1024 * 1024
+DEFAULT_MAX_SNAPSHOT_ROWS = 10_000_000
 DEFAULT_LOG_LEVEL = "INFO"
 
 VALID_LOG_LEVELS = ("CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG")
@@ -39,6 +41,8 @@ class WorkerConfig:
     artifact_storage_path: str
     log_level: str
     claim_timeout_seconds: int = DEFAULT_CLAIM_TIMEOUT_SECONDS
+    max_snapshot_bytes: int = DEFAULT_MAX_SNAPSHOT_BYTES
+    max_snapshot_rows: int = DEFAULT_MAX_SNAPSHOT_ROWS
 
     @classmethod
     def from_env(
@@ -66,6 +70,16 @@ class WorkerConfig:
             "ARTIFACT_STORAGE_PATH",
             default=DEFAULT_ARTIFACT_STORAGE_PATH,
         )
+        max_snapshot_bytes = _positive_int(
+            values,
+            "WORKER_MAX_SNAPSHOT_BYTES",
+            DEFAULT_MAX_SNAPSHOT_BYTES,
+        )
+        max_snapshot_rows = _positive_int(
+            values,
+            "WORKER_MAX_SNAPSHOT_ROWS",
+            DEFAULT_MAX_SNAPSHOT_ROWS,
+        )
         log_level = _log_level(values)
 
         return cls(
@@ -75,6 +89,8 @@ class WorkerConfig:
             heartbeat_interval_seconds=heartbeat_interval_seconds,
             claim_timeout_seconds=claim_timeout_seconds,
             artifact_storage_path=artifact_storage_path,
+            max_snapshot_bytes=max_snapshot_bytes,
+            max_snapshot_rows=max_snapshot_rows,
             log_level=log_level,
         )
 

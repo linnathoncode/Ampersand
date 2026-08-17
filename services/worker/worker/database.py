@@ -19,6 +19,7 @@ from .errors import (
     InvalidTenantSchemaError,
     JobOwnershipError,
     JobStateConflictError,
+    SnapshotNotFoundError,
     WorkerError,
 )
 from .job_state import (
@@ -80,6 +81,67 @@ _TRANSITION_JOB_SQL = """
 _LOOKUP_JOB_SQL = (
     "SELECT status, claimed_by FROM training_jobs WHERE id = %(job_id)s"
 )
+
+_LOAD_JOB_CONTEXT_SQL = """
+    SELECT
+        tj.id, tj.fingerprint, tj.training_config, tj.max_runtime_seconds,
+        ds.id, ds.storage_uri, ds.storage_format, ds.content_sha256, ds.row_count,
+        dd.id, dd.source_schema, dd.source_table, dd.target_column, dd.time_column,
+        dc.column_name, dc.role, dc.data_type, dc.is_nullable, dc.position
+    FROM training_jobs tj
+    JOIN dataset_snapshots ds ON ds.id = tj.dataset_snapshot_id
+    JOIN dataset_definitions dd ON dd.id = ds.dataset_definition_id
+    LEFT JOIN dataset_columns dc ON dc.dataset_definition_id = dd.id
+     AND dc.role IN ('feature', 'target', 'time')
+    WHERE tj.id = %(job_id)s
+      AND tj.claimed_by = %(worker_id)s
+      AND tj.status = 'running'
+    ORDER BY dc.position NULLS LAST
+"""
+
+_UPDATE_PROGRESS_SQL = """
+    UPDATE training_jobs
+    SET progress_percent = %(progress_percent)s,
+        progress_message = %(progress_message)s,
+        heartbeat_at = now(),
+        updated_at = now()
+    WHERE id = %(job_id)s
+      AND claimed_by = %(worker_id)s
+      AND status = 'running'
+"""
+
+
+@dataclass(frozen=True)
+class DatasetColumn:
+    """A trusted dataset column loaded for the worker boundary."""
+
+    name: str
+    role: str
+    data_type: str
+    is_nullable: bool
+    position: int
+
+
+@dataclass(frozen=True)
+class JobExecutionContext:
+    """Trusted job, snapshot, and dataset metadata for one claimed job."""
+
+    job_id: str
+    job_fingerprint: str
+    training_config: object
+    max_runtime_seconds: int
+    snapshot_id: str
+    snapshot_uri: str
+    snapshot_format: str
+    snapshot_content_sha256: str
+    snapshot_row_count: int
+    dataset_definition_id: str
+    source_schema: str
+    source_table: str
+    target_column: str | None
+    time_column: str | None
+    columns: tuple[DatasetColumn, ...]
+    schema_name: str
 
 
 @dataclass(frozen=True)
@@ -250,6 +312,148 @@ class Database:
             raise DatabaseConnectionError(
                 "Failed to update the training job"
             ) from exc
+
+    def load_job_execution_context(
+        self,
+        worker_id: str,
+        schema_name: str,
+        job_id: str,
+    ) -> JobExecutionContext:
+        """Load the trusted execution context for a claimed running job.
+
+        The snapshot and dataset metadata are resolved from the job's own
+        ``dataset_snapshot_id`` inside the tenant schema, never from an
+        external request. Ownership and state are re-validated so a stale or
+        foreign worker cannot read context for a job it no longer owns.
+        """
+        _assert_tenant_schema_name(schema_name)
+        connection = self._require_connection()
+        try:
+            with connection.transaction():
+                with connection.cursor() as cursor:
+                    _scope_tenant(cursor, schema_name)
+                    cursor.execute(
+                        _LOAD_JOB_CONTEXT_SQL,
+                        {"worker_id": worker_id, "job_id": job_id},
+                    )
+                    rows = cursor.fetchall()
+                    if not rows:
+                        self._raise_context_missing(
+                            cursor, job_id, worker_id
+                        )
+
+                    first = rows[0]
+                    columns: list[DatasetColumn] = []
+                    for row in rows:
+                        column_name = row[14]
+                        if column_name is None:
+                            continue
+                        columns.append(
+                            DatasetColumn(
+                                name=column_name,
+                                role=row[15],
+                                data_type=row[16],
+                                is_nullable=row[17],
+                                position=row[18],
+                            )
+                        )
+                    return JobExecutionContext(
+                        job_id=first[0],
+                        job_fingerprint=first[1],
+                        training_config=first[2],
+                        max_runtime_seconds=first[3],
+                        snapshot_id=first[4],
+                        snapshot_uri=first[5],
+                        snapshot_format=first[6],
+                        snapshot_content_sha256=first[7],
+                        snapshot_row_count=first[8],
+                        dataset_definition_id=first[9],
+                        source_schema=first[10],
+                        source_table=first[11],
+                        target_column=first[12],
+                        time_column=first[13],
+                        columns=tuple(columns),
+                        schema_name=schema_name,
+                    )
+        except (
+            DatabaseConnectionError,
+            InvalidTenantSchemaError,
+            JobOwnershipError,
+            JobStateConflictError,
+            SnapshotNotFoundError,
+        ):
+            raise
+        except Exception as exc:
+            raise DatabaseConnectionError(
+                "Failed to load the training job context"
+            ) from exc
+
+    def update_job_progress(
+        self,
+        *,
+        worker_id: str,
+        schema_name: str,
+        job_id: str,
+        progress_percent: int,
+        progress_message: str,
+    ) -> None:
+        """Persist an ownership-guarded progress update for a running job.
+
+        The update is conditional on the job being owned by ``worker_id`` and
+        still ``running``, so a cancelled or dead job cannot be overwritten by
+        a stale worker.
+        """
+        _assert_tenant_schema_name(schema_name)
+        connection = self._require_connection()
+        try:
+            with connection.transaction():
+                with connection.cursor() as cursor:
+                    _scope_tenant(cursor, schema_name)
+                    cursor.execute(
+                        _UPDATE_PROGRESS_SQL,
+                        {
+                            "worker_id": worker_id,
+                            "job_id": job_id,
+                            "progress_percent": progress_percent,
+                            "progress_message": progress_message,
+                        },
+                    )
+                    if cursor.rowcount == 0:
+                        self._raise_conflict(cursor, job_id, "running")
+        except (
+            DatabaseConnectionError,
+            JobOwnershipError,
+            JobStateConflictError,
+        ):
+            raise
+        except Exception as exc:
+            raise DatabaseConnectionError(
+                "Failed to update the training job progress"
+            ) from exc
+
+    def _raise_context_missing(
+        self, cursor, job_id: str, worker_id: str
+    ) -> None:
+        cursor.execute(_LOOKUP_JOB_SQL, {"job_id": job_id})
+        row = cursor.fetchone()
+        if row is None:
+            raise JobOwnershipError(
+                f"training job '{job_id}' was not found"
+            )
+        actual_status, claimed_by = row
+        if actual_status != "running":
+            raise JobStateConflictError(
+                f"training job '{job_id}' is in status '{actual_status}', "
+                "expected 'running'"
+            )
+        if claimed_by != worker_id:
+            raise JobOwnershipError(
+                f"training job '{job_id}' is claimed by '{claimed_by}', "
+                "not by this worker"
+            )
+        raise SnapshotNotFoundError(
+            "The snapshot or dataset for the training job is not available"
+        )
 
     def _raise_conflict(
         self, cursor, job_id: str, current_status: str

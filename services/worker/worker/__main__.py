@@ -1,8 +1,8 @@
 """Entrypoint for the private worker (``python -m worker``).
 
 The worker connects directly to PostgreSQL and never starts an HTTP server.
-It stays idle after verifying connectivity; job claiming and execution are
-added incrementally.
+It claims queued training jobs, executes them through the deterministic fake
+trainer, and reaches a terminal state before polling for the next job.
 """
 
 from __future__ import annotations
@@ -17,6 +17,7 @@ from dotenv import load_dotenv
 from .config import WorkerConfig
 from .database import Database
 from .errors import WorkerError
+from .executor import create_executor
 from .lifecycle import WorkerLifecycle
 from .logging import setup_logging
 
@@ -27,6 +28,11 @@ def create_database(config: WorkerConfig) -> Database:
     return Database(
         config.database_url, application_name=config.worker_id
     )
+
+
+def create_lifecycle(config: WorkerConfig, database: Database) -> WorkerLifecycle:
+    executor = create_executor(config, database)
+    return WorkerLifecycle(config, database, job_handler=executor.handle)
 
 
 def main(
@@ -50,7 +56,7 @@ def main(
 
     try:
         database = database_factory(config)
-        lifecycle = WorkerLifecycle(config, database)
+        lifecycle = create_lifecycle(config, database)
         return lifecycle.run()
     except WorkerError as exc:
         logger.error("%s: %s", exc.code, exc.message)
