@@ -8,19 +8,22 @@ export type AuthContext = {
   userId: string;
   schemaName: string;
   claims: string[];
+  authType: string;
 };
 
 export function getAuthContext(headers: Headers): AuthContext | null {
   const userId = headers.get("x-user-id");
   const schemaName = headers.get("x-tenant-schema");
+  const authType = headers.get("x-auth-type");
 
-  if (!userId || !schemaName) {
+  if (!userId || !schemaName || !authType) {
     return null;
   }
 
   return {
     userId,
     schemaName,
+    authType,
     claims: decodeClaims(headers.get("x-user-claims")),
   };
 }

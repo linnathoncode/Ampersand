@@ -29,6 +29,7 @@ describe("model publication authorization", () => {
         headers: {
           "x-user-id": "22222222-2222-4222-8222-222222222222",
           "x-tenant-schema": "ampersand_dev",
+          "x-auth-type": "jwt",
           "x-user-claims": "get.model_versions",
         },
       }),

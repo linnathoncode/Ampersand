@@ -31,6 +31,7 @@ const authorizedHeaders = {
   "content-type": "application/json",
   "x-user-id": "11111111-1111-4111-8111-111111111111",
   "x-tenant-schema": "tenant_ampersand_dev",
+  "x-auth-type": "jwt",
   "x-user-claims": "invoke.tool_definitions",
 };
 

@@ -6,7 +6,9 @@
     "url": "DATABASE_URL",
     "isMultiTenant": true
   },
-  "redis": {},
+  "redis": {
+    "url": "REDIS_URL"
+  },
   "authentication": {
     "enabled": true,
     "mode": "full",

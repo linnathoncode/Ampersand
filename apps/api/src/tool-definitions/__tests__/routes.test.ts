@@ -31,6 +31,7 @@ describe("tool-definition generation authorization", () => {
         headers: {
           "x-user-id": "22222222-2222-4222-8222-222222222222",
           "x-tenant-schema": "tenant_ampersand_dev",
+          "x-auth-type": "jwt",
           "x-user-claims": "publish.model_versions",
         },
       }),
