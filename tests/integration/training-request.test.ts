@@ -19,8 +19,6 @@ import { registerFormats } from "./support/contracts";
 
 registerFormats();
 
-process.env.TRAINING_MAX_ACTIVE_JOBS ??= "100";
-
 const userId = "22222222-2222-4222-8222-222222222222";
 const sourceTable = "training_request_energy_readings";
 

@@ -18,7 +18,7 @@
     "typecheck:integration": "tsc -p tests/integration",
     "test": "vitest run",
     "test:e2e": "playwright test",
-    "test:integration": "bun --env-file=.env vitest run --config tests/integration/vitest.integration.config.mts"
+    "test:integration": "TRAINING_MAX_ACTIVE_JOBS=100 bun --env-file=.env vitest run --config tests/integration/vitest.integration.config.mts"
   },
   "devDependencies": {
     "@ampersand/contracts": "workspace:*",
