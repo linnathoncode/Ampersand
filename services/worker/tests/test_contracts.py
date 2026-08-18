@@ -40,6 +40,25 @@ VALID_FEATURES = [
 
 VALID_TARGET = {"name": "energy_usage", "dataType": "number"}
 
+VALID_SPLIT_METADATA = {
+    "strategy": "chronological",
+    "timeColumn": "recorded_at",
+    "trainRowCount": 80,
+    "testRowCount": 20,
+    "testFraction": 0.2,
+    "roundingRule": "round(rowCount * testFraction), clamped so both partitions keep at least one row",
+    "trainingBoundary": "2026-08-04T07:59:59Z",
+    "testStart": "2026-08-04T08:00:00Z",
+    "randomSeed": 42,
+    "featureOrder": ["temperature", "occupancy"],
+    "trainerVersion": "1.0.0",
+    "dependencyVersions": {
+        "python": "3.11.4",
+        "pyarrow": "16.0.0",
+        "pydantic": "2.7.0",
+    },
+}
+
 
 def input_payload(**overrides):
     payload = {
@@ -85,6 +104,7 @@ def success_result_payload(**overrides):
                     "missingRate": 0.01,
                 }
             ],
+            "splitMetadata": VALID_SPLIT_METADATA,
         },
     }
     payload.update(overrides)
@@ -211,11 +231,81 @@ class TestWorkerResult:
                     ],
                 }
             },
+            {
+                "result": {
+                    **success_result_payload()["result"],
+                    "splitMetadata": {
+                        **VALID_SPLIT_METADATA,
+                        "trainRowCount": 0,
+                    },
+                }
+            },
+            {
+                "result": {
+                    **success_result_payload()["result"],
+                    "splitMetadata": {
+                        **VALID_SPLIT_METADATA,
+                        "testRowCount": 0,
+                    },
+                }
+            },
+            {
+                "result": {
+                    **success_result_payload()["result"],
+                    "splitMetadata": {
+                        **VALID_SPLIT_METADATA,
+                        "testFraction": 1,
+                    },
+                }
+            },
+            {
+                "result": {
+                    **success_result_payload()["result"],
+                    "splitMetadata": {
+                        **VALID_SPLIT_METADATA,
+                        "strategy": "random",
+                    },
+                }
+            },
+            {
+                "result": {
+                    **success_result_payload()["result"],
+                    "splitMetadata": {
+                        **VALID_SPLIT_METADATA,
+                        "trainingBoundary": "not-a-time",
+                    },
+                }
+            },
+            {
+                "result": {
+                    **success_result_payload()["result"],
+                    "splitMetadata": {
+                        **VALID_SPLIT_METADATA,
+                        "featureOrder": [],
+                    },
+                }
+            },
         ],
     )
     def test_invalid_success_result_rejected(self, override):
         with pytest.raises(WorkerContractValidationError):
             validate_worker_result(success_result_payload(**override))
+
+    def test_success_without_split_metadata_rejected(self):
+        payload = success_result_payload()
+        payload["result"].pop("splitMetadata")
+        with pytest.raises(WorkerContractValidationError):
+            validate_worker_result(payload)
+
+    def test_split_metadata_accepts_utc_midnight_date_timestamps(self):
+        payload = success_result_payload()
+        payload["result"]["splitMetadata"] = {
+            **VALID_SPLIT_METADATA,
+            "trainingBoundary": "2026-08-03T00:00:00+00:00",
+            "testStart": "2026-08-04T00:00:00+00:00",
+        }
+
+        validate_worker_result(payload)
 
     def test_success_with_error_field_rejected(self):
         with pytest.raises(WorkerContractValidationError):
@@ -289,6 +379,33 @@ STRICT_RESULT_CASES = [
                     "allowedValues": [True],
                 }
             ],
+        }
+    },
+    {
+        "result": {
+            **success_result_payload()["result"],
+            "splitMetadata": {
+                **VALID_SPLIT_METADATA,
+                "dependencyVersions": {1: "x"},
+            },
+        }
+    },
+    {
+        "result": {
+            **success_result_payload()["result"],
+            "splitMetadata": {
+                **VALID_SPLIT_METADATA,
+                "dependencyVersions": {"python": ""},
+            },
+        }
+    },
+    {
+        "result": {
+            **success_result_payload()["result"],
+            "splitMetadata": {
+                **VALID_SPLIT_METADATA,
+                "randomSeed": True,
+            },
         }
     },
 ]

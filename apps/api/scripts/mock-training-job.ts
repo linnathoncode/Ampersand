@@ -371,6 +371,25 @@ function createWorkerResult(
               missingRate: 0,
             },
           ],
+          splitMetadata: {
+            strategy: "chronological",
+            timeColumn: workerInput.timeColumn,
+            trainRowCount: 80,
+            testRowCount: 20,
+            testFraction: workerInput.trainingConfig.testFraction,
+            roundingRule:
+              "round(rowCount * testFraction), clamped so both partitions keep at least one row",
+            trainingBoundary: "2026-08-04T07:59:59.000Z",
+            testStart: "2026-08-04T08:00:00.000Z",
+            randomSeed: workerInput.trainingConfig.randomSeed,
+            featureOrder: ["temperature", "occupancy"],
+            trainerVersion: workerInput.trainingConfig.trainerVersion,
+            dependencyVersions: {
+              python: "3.11.4",
+              pyarrow: "16.0.0",
+              pydantic: "2.7.0",
+            },
+          },
         }
       : {
           status: "failed",

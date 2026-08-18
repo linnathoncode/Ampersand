@@ -19,6 +19,7 @@ from pathlib import Path
 from .contracts import TrainingWorkerInput, validate_worker_result
 from .dataset_validation import ValidatedDataset
 from .errors import WorkerContractValidationError
+from .splitting import DatasetSplit
 
 FAKE_ARTIFACT_MARKER = b"AMPERSAND_FAKE_TRAINING_ARTIFACT"
 
@@ -41,6 +42,7 @@ class FakeTrainer:
         self,
         worker_input: TrainingWorkerInput,
         dataset: ValidatedDataset,
+        split: DatasetSplit,
         on_progress: Callable[[], None] | None = None,
     ) -> FakeTrainingOutput:
         seed = _training_seed(worker_input)
@@ -62,6 +64,7 @@ class FakeTrainer:
                 "baselineMetrics": baseline,
                 "artifact": artifact,
                 "features": features,
+                "splitMetadata": split.metadata,
             },
             artifact_path=artifact_path,
         )
@@ -120,6 +123,8 @@ def validate_result_matches_input(result: dict, worker_input: TrainingWorkerInpu
 
 def _training_seed(worker_input: TrainingWorkerInput) -> int:
     digest = hashlib.sha256()
+    digest.update(str(worker_input.trainingConfig.randomSeed).encode())
+    digest.update(b"\0")
     digest.update(worker_input.jobFingerprint.encode())
     digest.update(b"\0")
     digest.update(worker_input.snapshot.contentSha256.encode())

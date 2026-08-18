@@ -45,6 +45,25 @@ const workerSuccess = {
       sizeBytes: 1024,
     },
     features: [workerFeature],
+    splitMetadata: {
+      strategy: "chronological",
+      timeColumn: "recorded_at",
+      trainRowCount: 80,
+      testRowCount: 20,
+      testFraction: 0.2,
+      roundingRule:
+        "round(rowCount * testFraction), clamped so both partitions keep at least one row",
+      trainingBoundary: "2026-08-04T07:59:59Z",
+      testStart: timestamp,
+      randomSeed: 42,
+      featureOrder: ["temperature", "occupancy"],
+      trainerVersion: "1.0.0",
+      dependencyVersions: {
+        python: "3.11.4",
+        pyarrow: "16.0.0",
+        pydantic: "2.7.0",
+      },
+    },
   },
 };
 
@@ -175,6 +194,60 @@ describe("training contracts", () => {
       Value.Check(TrainingWorkerResultDto, {
         ...workerSuccess,
         result: { ...workerSuccess.result, error: workerFailure.result.error },
+      }),
+    ).toBe(false);
+    expect(
+      Value.Check(TrainingWorkerResultDto, {
+        ...workerSuccess,
+        result: { ...workerSuccess.result, splitMetadata: undefined },
+      }),
+    ).toBe(false);
+    expect(
+      Value.Check(TrainingWorkerResultDto, {
+        ...workerSuccess,
+        result: {
+          ...workerSuccess.result,
+          splitMetadata: {
+            ...workerSuccess.result.splitMetadata,
+            trainRowCount: 0,
+          },
+        },
+      }),
+    ).toBe(false);
+    expect(
+      Value.Check(TrainingWorkerResultDto, {
+        ...workerSuccess,
+        result: {
+          ...workerSuccess.result,
+          splitMetadata: {
+            ...workerSuccess.result.splitMetadata,
+            strategy: "random",
+          },
+        },
+      }),
+    ).toBe(false);
+    expect(
+      Value.Check(TrainingWorkerResultDto, {
+        ...workerSuccess,
+        result: {
+          ...workerSuccess.result,
+          splitMetadata: {
+            ...workerSuccess.result.splitMetadata,
+            trainingBoundary: "not-a-time",
+          },
+        },
+      }),
+    ).toBe(false);
+    expect(
+      Value.Check(TrainingWorkerResultDto, {
+        ...workerSuccess,
+        result: {
+          ...workerSuccess.result,
+          splitMetadata: {
+            ...workerSuccess.result.splitMetadata,
+            dependencyVersions: { python: "" },
+          },
+        },
       }),
     ).toBe(false);
     expect(

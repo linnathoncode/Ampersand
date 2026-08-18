@@ -15,6 +15,7 @@ payloads as the TypeScript contract tests.
 from __future__ import annotations
 
 import math
+from datetime import datetime
 from typing import Annotated, Any, Literal, Mapping, Union
 
 from pydantic import (
@@ -59,6 +60,33 @@ def _finite(value: float) -> float:
         raise ValueError("must be a finite number")
     return value
 
+
+def _date_time_string(value: str) -> str:
+    if not isinstance(value, str):
+        raise ValueError("must be a string")
+    normalized = value[:-1] + "+00:00" if value.endswith("Z") else value
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError as exc:
+        raise ValueError("must be an RFC 3339 date-time string") from exc
+    if parsed.tzinfo is None:
+        raise ValueError("must be an RFC 3339 date-time string")
+    return value
+
+
+def _strict_string_map(value: Any) -> Any:
+    if not isinstance(value, dict):
+        raise ValueError("must be an object")
+    for key, item in value.items():
+        if not isinstance(key, str) or not isinstance(item, str):
+            raise ValueError("keys and values must be strings")
+        if not key or not item:
+            raise ValueError("keys and values must be non-empty strings")
+    return value
+
+
+DateTimeString = Annotated[StrictStr, AfterValidator(_date_time_string)]
+NonEmptyStringMap = Annotated[dict[str, str], BeforeValidator(_strict_string_map)]
 
 NonEmptyString = Annotated[
     StrictStr, StringConstraints(min_length=1)
@@ -182,6 +210,28 @@ class TrainingWorkerModelFeature(BaseModel):
     missingRate: BoundedFiniteFloat
 
 
+class TrainingWorkerSplitMetadata(BaseModel):
+    model_config = _forbid_extra()
+
+    strategy: Literal["chronological", "seeded"]
+    timeColumn: Union[PgIdentifier, None]
+    trainRowCount: PositiveInteger
+    testRowCount: PositiveInteger
+    testFraction: Annotated[
+        float,
+        BeforeValidator(_strict_number),
+        Field(gt=0, lt=1),
+        AfterValidator(_finite),
+    ]
+    roundingRule: NonEmptyString
+    trainingBoundary: Union[DateTimeString, None]
+    testStart: Union[DateTimeString, None]
+    randomSeed: IntegerT
+    featureOrder: list[PgIdentifier] = Field(min_length=1)
+    trainerVersion: NonEmptyString
+    dependencyVersions: NonEmptyStringMap
+
+
 class TrainingWorkerSuccess(BaseModel):
     model_config = _forbid_extra()
 
@@ -190,6 +240,7 @@ class TrainingWorkerSuccess(BaseModel):
     baselineMetrics: TrainingWorkerMetrics
     artifact: TrainingWorkerArtifact
     features: list[TrainingWorkerModelFeature] = Field(min_length=1)
+    splitMetadata: TrainingWorkerSplitMetadata
 
 
 class TrainingWorkerFailureError(BaseModel):

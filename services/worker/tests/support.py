@@ -19,6 +19,7 @@ from worker.contracts import (
     build_worker_input as build_contract_worker_input,
 )
 from worker.database import DatasetColumn, JobExecutionContext
+from worker.splitting import load_snapshot_table as load_table
 
 FINGERPRINT = "a" * 64
 JOB_ID = "11111111-1111-4111-8111-111111111111"
@@ -117,6 +118,7 @@ def make_context(
     job_fingerprint: str = FINGERPRINT,
     snapshot_format: str = "parquet",
     time_column: str | None = "recorded_at",
+    training_config: dict | None = None,
 ) -> JobExecutionContext:
     if columns is None:
         columns = (
@@ -128,7 +130,7 @@ def make_context(
     return JobExecutionContext(
         job_id=JOB_ID,
         job_fingerprint=job_fingerprint,
-        training_config=TRAINING_CONFIG,
+        training_config=training_config or TRAINING_CONFIG,
         max_runtime_seconds=600,
         snapshot_id=SNAPSHOT_ID,
         snapshot_uri=snapshot_uri,

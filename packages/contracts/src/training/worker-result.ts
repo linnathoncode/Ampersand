@@ -46,6 +46,40 @@ export type TrainingWorkerModelFeature = Static<
   typeof TrainingWorkerModelFeatureDto
 >;
 
+export const TrainingWorkerSplitMetadataDto = Type.Object(
+  {
+    strategy: Type.Union([
+      Type.Literal("chronological"),
+      Type.Literal("seeded"),
+    ]),
+    timeColumn: Type.Union([PostgreSqlIdentifierSchema, Type.Null()]),
+    trainRowCount: Type.Integer({ minimum: 1 }),
+    testRowCount: Type.Integer({ minimum: 1 }),
+    testFraction: Type.Number({ exclusiveMinimum: 0, exclusiveMaximum: 1 }),
+    roundingRule: Type.String({ minLength: 1 }),
+    trainingBoundary: Type.Union([
+      Type.String({ format: "date-time" }),
+      Type.Null(),
+    ]),
+    testStart: Type.Union([
+      Type.String({ format: "date-time" }),
+      Type.Null(),
+    ]),
+    randomSeed: Type.Integer(),
+    featureOrder: Type.Array(PostgreSqlIdentifierSchema, { minItems: 1 }),
+    trainerVersion: Type.String({ minLength: 1 }),
+    dependencyVersions: Type.Record(
+      Type.String({ minLength: 1 }),
+      Type.String({ minLength: 1 }),
+    ),
+  },
+  { additionalProperties: false },
+);
+
+export type TrainingWorkerSplitMetadata = Static<
+  typeof TrainingWorkerSplitMetadataDto
+>;
+
 export const TrainingWorkerSuccessDto = Type.Object(
   {
     status: Type.Literal("succeeded"),
@@ -53,6 +87,7 @@ export const TrainingWorkerSuccessDto = Type.Object(
     baselineMetrics: TrainingWorkerMetricsDto,
     artifact: TrainingWorkerArtifactDto,
     features: Type.Array(TrainingWorkerModelFeatureDto, { minItems: 1 }),
+    splitMetadata: TrainingWorkerSplitMetadataDto,
   },
   { additionalProperties: false },
 );

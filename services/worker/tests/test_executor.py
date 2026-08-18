@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
+import pyarrow as pa
 import pytest
 
 from worker.config import WorkerConfig
@@ -11,6 +12,7 @@ from worker.database import (
     CLAIMED_TRAINING_JOB_PROGRESS_MESSAGE,
     ClaimedJob,
     Database,
+    DatasetColumn,
 )
 from worker.errors import JobOwnershipError
 from worker.executor import (
@@ -94,7 +96,79 @@ def test_valid_job_succeeds_and_cleans_fake_artifact(tmp_path):
     JobExecutor(config(tmp_path), database).handle(claimed_job())
 
     assert database.transitions[-1]["next_status"] == "succeeded"
-    assert [item["progress_percent"] for item in database.progress] == [50, 80]
+    assert [item["progress_percent"] for item in database.progress] == [
+        50,
+        65,
+        80,
+    ]
+    assert list(tmp_path.glob("*.fake.onnx")) == []
+
+
+def test_no_time_column_job_succeeds(tmp_path):
+    snapshot = make_snapshot_file(
+        tmp_path,
+        columns=[
+            ("temperature", pa.float64()),
+            ("energy_usage", pa.float64()),
+        ],
+        rows=[(21.5, 240.5), (22.0, 310.2), (19.0, 180.0)],
+    )
+    context = make_context(
+        snapshot_uri="snapshot.parquet",
+        content_sha256=sha256_of(snapshot),
+        row_count=3,
+        time_column=None,
+        columns=(
+            DatasetColumn("temperature", "feature", "number", False, 0),
+            DatasetColumn("energy_usage", "target", "number", False, 1),
+        ),
+    )
+    database = StubDatabase(context)
+
+    JobExecutor(config(tmp_path), database).handle(claimed_job())
+
+    assert database.transitions[-1]["next_status"] == "succeeded"
+    assert [item["progress_percent"] for item in database.progress] == [
+        50,
+        65,
+        80,
+    ]
+
+
+def test_missing_timestamps_mark_job_failed(tmp_path):
+    snapshot = make_snapshot_file(
+        tmp_path,
+        columns=[
+            ("temperature", pa.float64()),
+            ("occupancy", pa.int64()),
+            ("energy_usage", pa.float64()),
+            ("recorded_at", pa.timestamp("ms")),
+        ],
+        rows=[
+            (21.5, 3, 240.5, None),
+            (22.0, 5, 310.2, 1700000060000),
+        ],
+    )
+    context = make_context(
+        snapshot_uri="snapshot.parquet",
+        content_sha256=sha256_of(snapshot),
+        row_count=2,
+        columns=(
+            DatasetColumn("temperature", "feature", "number", False, 0),
+            DatasetColumn("occupancy", "feature", "integer", False, 1),
+            DatasetColumn("energy_usage", "target", "number", False, 2),
+            DatasetColumn("recorded_at", "time", "datetime", True, 3),
+        ),
+    )
+    database = StubDatabase(context)
+
+    JobExecutor(config(tmp_path), database).handle(claimed_job())
+
+    assert database.transitions[-1]["next_status"] == "failed"
+    assert (
+        database.transitions[-1]["error_code"]
+        == "SNAPSHOT_TIME_VALUE_MISSING"
+    )
     assert list(tmp_path.glob("*.fake.onnx")) == []
 
 

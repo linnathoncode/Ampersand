@@ -192,3 +192,39 @@ class SnapshotCategoryCardinalityExceededError(SnapshotError):
     """A category snapshot column exceeds the unique-value safety bound."""
 
     code = "SNAPSHOT_CATEGORY_CARDINALITY_EXCEEDED"
+
+
+class SnapshotTimeValueMissingError(SnapshotError):
+    """The configured time column contains missing timestamp values."""
+
+    code = "SNAPSHOT_TIME_VALUE_MISSING"
+
+
+class SnapshotTimeValueInvalidError(SnapshotError):
+    """A time column value could not be used for chronological ordering."""
+
+    code = "SNAPSHOT_TIME_VALUE_INVALID"
+
+
+class TrainingSplitError(WorkerError):
+    """Base class for dataset splitting and preprocessing failures."""
+
+    code = "TRAINING_SPLIT_ERROR"
+
+
+class TrainingSplitInvalidError(TrainingSplitError):
+    """The dataset could not be partitioned into train and test sets."""
+
+    code = "TRAINING_SPLIT_INVALID"
+
+
+class TrainingSplitInsufficientRowsError(TrainingSplitError):
+    """The dataset has too few rows to form both partitions."""
+
+    code = "TRAINING_SPLIT_INSUFFICIENT_ROWS"
+
+
+class TrainingSplitBoundaryInvalidError(TrainingSplitError):
+    """A chronological split cannot separate test rows without leaking time."""
+
+    code = "TRAINING_SPLIT_BOUNDARY_INVALID"

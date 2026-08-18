@@ -39,12 +39,15 @@ from .errors import (
 )
 from .fake_trainer import FakeTrainer, validate_fake_result
 from .snapshots import resolve_snapshot_path, verify_snapshot_file
+from .splitting import load_snapshot_table, split_dataset
 
 _WORKER_FEATURE_TYPES = ("number", "integer", "boolean", "category")
 _WORKER_TARGET_TYPES = ("number", "integer")
 
 SNAPSHOT_VERIFIED_PROGRESS_PERCENT = 50
 SNAPSHOT_VERIFIED_PROGRESS_MESSAGE = "Snapshot verified; validating dataset schema"
+SPLIT_PROGRESS_PERCENT = 65
+SPLIT_PROGRESS_MESSAGE = "Dataset split and preprocessing completed"
 TRAINING_PROGRESS_PERCENT = 80
 TRAINING_PROGRESS_MESSAGE = "Running deterministic fake training; no model registered"
 SUCCESS_PROGRESS_PERCENT = 100
@@ -202,8 +205,28 @@ class JobExecutor:
             )
             self._check_runtime()
 
+            table = load_snapshot_table(snapshot_path, on_batch=heartbeat)
+            self._check_runtime()
+            split = split_dataset(
+                table,
+                time_column=worker_input.timeColumn,
+                test_fraction=worker_input.trainingConfig.testFraction,
+                random_seed=worker_input.trainingConfig.randomSeed,
+                feature_order=[
+                    feature.name for feature in worker_input.features
+                ],
+                trainer_version=worker_input.trainingConfig.trainerVersion,
+                on_batch=heartbeat,
+            )
+            self._update_progress(
+                job,
+                SPLIT_PROGRESS_PERCENT,
+                SPLIT_PROGRESS_MESSAGE,
+            )
+            self._check_runtime()
+
             output = self._fake_trainer.train(
-                worker_input, dataset, on_progress=heartbeat
+                worker_input, dataset, split, on_progress=heartbeat
             )
             try:
                 self._check_runtime()

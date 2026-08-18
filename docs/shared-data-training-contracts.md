@@ -298,6 +298,22 @@ Worker feature types are limited to `number`, `integer`, `boolean`, and `categor
 
 The worker reads rows from the referenced Parquet file; dataset rows are not embedded in the DTO. Before training, it must verify the snapshot checksum. The worker cannot choose another tenant, snapshot, feature set, target, configuration, or artifact directory.
 
+## Dataset splitting and reproducibility
+
+Before a trainer runs, the worker partitions the validated snapshot into training and test rows and records reproducible split metadata.
+
+When `timeColumn` is set, the split is chronological:
+
+- Rows are sorted by timestamp ascending.
+- The requested test size is `round(rowCount * testFraction)`, then clamped so both partitions keep at least one row.
+- Identical timestamps are never separated across the boundary, because a duplicate timestamp on both sides would let training see future rows. The boundary is moved until every test timestamp is strictly after the final training timestamp.
+- Missing timestamps fail the job with `SNAPSHOT_TIME_VALUE_MISSING` before a trainer runs.
+- A dataset that cannot be split without leaking timestamps, such as one where all rows share one timestamp, fails with `TRAINING_SPLIT_BOUNDARY_INVALID`.
+
+When `timeColumn` is null there is no chronological order to preserve, so the worker uses a deterministic seeded shuffle of row indexes; `randomSeed` comes from the resolved training configuration.
+
+The successful worker result includes `splitMetadata` with the effective `strategy` (`chronological` or `seeded`), the resolved `timeColumn`, train and test row counts, the configured `testFraction`, the documented `roundingRule`, the `trainingBoundary` and `testStart` timestamps (null when seeded), the `randomSeed`, the stable `featureOrder`, the `trainerVersion`, and `dependencyVersions` for the preprocessing runtime. Identical snapshot bytes and identical resolved configuration always produce the same split, and the configured seed is applied to every seeded step rather than being derived from the job alone.
+
 ## Job lifecycle
 
 ```text
@@ -356,6 +372,7 @@ Lifecycle writes must be conditional on the current state. Worker progress, hear
 | `TrainingWorkerMetricsDto` | Model or baseline regression metrics |
 | `TrainingWorkerArtifactDto` | Produced ONNX artifact metadata |
 | `TrainingWorkerModelFeatureDto` | Frozen feature bounds and categories |
+| `TrainingWorkerSplitMetadataDto` | Reproducible train/test split metadata |
 | `TrainingWorkerSuccessDto` | Successful training result |
 | `TrainingWorkerFailureDto` | Structured training failure |
 | `TrainingWorkerResultDto` | Complete worker-to-Nucleus result |
@@ -386,6 +403,8 @@ Lifecycle writes must be conditional on the current state. Worker progress, hear
 - Snapshots are immutable Parquet files verified with SHA-256 before training.
 - A deterministic fingerprint prevents duplicate training for the same snapshot and configuration.
 - Training configuration is resolved by the server and includes a fixed trainer version, random seed, chronological split, test fraction, and runtime bound.
+- Time-based rows are sorted chronologically and never leak future rows into training; equal timestamps stay on one side of the boundary, and missing or unusable timestamps fail before a trainer runs.
+- Identical snapshot bytes and resolved configuration reproduce the same split and preprocessing metadata, and the resolved seed is applied to every seeded step.
 - Only the private worker receives `TrainingWorkerInputDto`; no public route exposes worker control.
 - Conditional lifecycle updates prevent stale workers from overwriting cancellation or dead-job decisions.
 - Users and workers cannot provide tool schemas; Nucleus generates them from a published model and its frozen features.
@@ -396,7 +415,7 @@ Lifecycle writes must be conditional on the current state. Worker progress, hear
 
 `TrainingWorkerResultDto` is the worker-to-Nucleus boundary after a training attempt. Every result identifies the job, exact training fingerprint, and claiming worker.
 
-A successful `result` uses `TrainingWorkerSuccessDto` with the literal status `succeeded`. It contains model and baseline MAE, RMSE, and R-squared metrics through `TrainingWorkerMetricsDto`; ONNX URI, lowercase SHA-256 digest, and positive file size through `TrainingWorkerArtifactDto`; and at least one ordered `TrainingWorkerModelFeatureDto`. Each model feature records its data type, nullable numeric bounds, nullable allowed values, and a missing rate from 0 through 1. Nucleus uses these fields to register the candidate model, artifact, and frozen model-feature contract.
+A successful `result` uses `TrainingWorkerSuccessDto` with the literal status `succeeded`. It contains model and baseline MAE, RMSE, and R-squared metrics through `TrainingWorkerMetricsDto`; ONNX URI, lowercase SHA-256 digest, and positive file size through `TrainingWorkerArtifactDto`; at least one ordered `TrainingWorkerModelFeatureDto`; and the reproducible `TrainingWorkerSplitMetadataDto`. Each model feature records its data type, nullable numeric bounds, nullable allowed values, and a missing rate from 0 through 1. The split metadata records how the dataset was partitioned, so the same snapshot and configuration always train on the same rows. Nucleus uses these fields to register the candidate model, artifact, and frozen model-feature contract.
 
 A failed `result` uses `TrainingWorkerFailureDto` with the literal status `failed` and contains a non-empty machine-readable error code and human-readable message. The success and failure shapes are mutually exclusive and reject additional properties. Nucleus verifies the UUID, 64-character lowercase fingerprint, and worker ownership before accepting either result so stale or unrelated workers cannot complete the job.
 
