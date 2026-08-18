@@ -9,6 +9,25 @@
   "redis": {
     "url": "REDIS_URL"
   },
+  "rateLimit": {
+    "enabled": true,
+    "strategy": "sliding-window",
+    "keyPrefix": "ampersand:rate-limit:",
+    "failClosed": true,
+    "privateRoutes": {
+      "window": "1m",
+      "max": 60
+    },
+    "byIp": true,
+    "byUserId": true,
+    "byEndpoint": true,
+    "skipSuccessfulRequests": false,
+    "headers": {
+      "remaining": "X-RateLimit-Remaining",
+      "reset": "X-RateLimit-Reset",
+      "limit": "X-RateLimit-Limit"
+    }
+  },
   "authentication": {
     "enabled": true,
     "mode": "full",

@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test";
 import type { PredictionRejectedResponse } from "@ampersand/contracts";
 import type { PoolClient } from "pg";
 
+import type { TenantQuotaStore } from "../quota/tenant-quota";
+
 process.env.DATABASE_URL ??=
   "postgresql://unused:unused@localhost:5432/unused";
 
@@ -59,6 +61,31 @@ const runWithoutDatabase = async <Result>(
   operation: (client: PoolClient) => Promise<Result>,
 ): Promise<Result> => operation({} as PoolClient);
 
+const quotaResetsAt = new Date("2026-08-19T00:00:00.000Z");
+const unlimitedQuotaStore: TenantQuotaStore = {
+  reserve: async () => ({
+    allowed: true,
+    used: 1,
+    limit: 1_000,
+    remaining: 999,
+    resetsAt: quotaResetsAt,
+  }),
+  release: async () => {},
+};
+const unlimitedQuotaDependencies = {
+  getQuotaStore: () => unlimitedQuotaStore,
+  reserveQuota: async () => ({
+    ok: true as const,
+    reservation: {
+      allowed: true as const,
+      used: 1,
+      limit: 1_000,
+      remaining: 999,
+      resetsAt: quotaResetsAt,
+    },
+  }),
+};
+
 describe("prediction route", () => {
   test("rejects an unauthenticated request", async () => {
     const response = await predictionRoutes.handle(
@@ -103,6 +130,10 @@ describe("prediction route", () => {
 
   test("returns an authorized structured rejection", async () => {
     const routes = createPredictionRoutes({
+      ...unlimitedQuotaDependencies,
+      getQuotaStore: () => {
+        throw new Error("Quota must not be reserved for rejected input");
+      },
       withTransaction: runWithoutDatabase,
       validatePrediction: async () => ({
         kind: "rejected",
@@ -124,6 +155,7 @@ describe("prediction route", () => {
 
   test("rejects a model without active input features", async () => {
     const routes = createPredictionRoutes({
+      ...unlimitedQuotaDependencies,
       withTransaction: runWithoutDatabase,
       validatePrediction: async () => ({
         kind: "accepted",
@@ -181,6 +213,7 @@ describe("prediction route", () => {
     };
 
     const routes = createPredictionRoutes({
+      ...unlimitedQuotaDependencies,
       withTransaction: runWithoutDatabase,
       validatePrediction: async () => accepted,
       verifyArtifact: async () => ({
@@ -226,6 +259,11 @@ describe("prediction route", () => {
     );
 
     expect(response.status).toBe(200);
+    expect(response.headers.get("X-Tenant-Quota-Limit")).toBe("1000");
+    expect(response.headers.get("X-Tenant-Quota-Remaining")).toBe("999");
+    expect(response.headers.get("X-Tenant-Quota-Reset")).toBe(
+      quotaResetsAt.toISOString(),
+    );
     expect(await response.json()).toEqual(completedResponse);
   });
 
@@ -233,6 +271,7 @@ describe("prediction route", () => {
     let inferenceAttempted = false;
 
     const routes = createPredictionRoutes({
+      ...unlimitedQuotaDependencies,
       withTransaction: runWithoutDatabase,
       validatePrediction: async () => ({
         kind: "accepted",
@@ -274,6 +313,7 @@ describe("prediction route", () => {
 
   test("returns a safe error when ONNX inference fails", async () => {
     const routes = createPredictionRoutes({
+      ...unlimitedQuotaDependencies,
       withTransaction: runWithoutDatabase,
       validatePrediction: async () => ({
         kind: "accepted",
@@ -309,6 +349,171 @@ describe("prediction route", () => {
         message: "The model could not produce a prediction",
       },
     });
+  });
+
+  test("returns 429 without verifying an artifact when quota is exhausted", async () => {
+    let artifactVerificationAttempted = false;
+    const routes = createPredictionRoutes({
+      getQuotaStore: () => unlimitedQuotaStore,
+      reserveQuota: async () => ({
+        ok: false,
+        status: 429,
+        body: {
+          error: {
+            code: "TENANT_INFERENCE_QUOTA_EXCEEDED",
+            message: "The tenant's daily inference quota has been reached",
+            limit: 10,
+            used: 10,
+            resetsAt: quotaResetsAt.toISOString(),
+          },
+        },
+      }),
+      withTransaction: runWithoutDatabase,
+      validatePrediction: async () => ({
+        kind: "accepted",
+        toolDefinitionId: "33333333-3333-4333-8333-333333333333",
+        modelVersionId,
+        modelVersion: 1,
+        inputs: validRequest.inputs,
+        warnings: [],
+      }),
+      verifyArtifact: async () => {
+        artifactVerificationAttempted = true;
+        return {
+          ok: true,
+          actualSha256: "0".repeat(64),
+          bytes: verifiedArtifactBytes,
+        };
+      },
+    });
+
+    const response = await routes.handle(
+      new Request(predictionUrl, {
+        method: "POST",
+        headers: authorizedHeaders,
+        body: JSON.stringify(validRequest),
+      }),
+    );
+
+    expect(response.status).toBe(429);
+    expect(response.headers.get("X-Tenant-Quota-Limit")).toBe("10");
+    expect(response.headers.get("X-Tenant-Quota-Remaining")).toBe("0");
+    expect(artifactVerificationAttempted).toBe(false);
+  });
+
+  test("fails closed when the quota service is unavailable", async () => {
+    const routes = createPredictionRoutes({
+      getQuotaStore: () => unlimitedQuotaStore,
+      reserveQuota: async () => {
+        throw new Error("Redis unavailable");
+      },
+      withTransaction: runWithoutDatabase,
+      validatePrediction: async () => ({
+        kind: "accepted",
+        toolDefinitionId: "33333333-3333-4333-8333-333333333333",
+        modelVersionId,
+        modelVersion: 1,
+        inputs: validRequest.inputs,
+        warnings: [],
+      }),
+    });
+
+    const response = await routes.handle(
+      new Request(predictionUrl, {
+        method: "POST",
+        headers: authorizedHeaders,
+        body: JSON.stringify(validRequest),
+      }),
+    );
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({
+      error: {
+        code: "QUOTA_SERVICE_UNAVAILABLE",
+        message: "The inference quota could not be verified",
+      },
+    });
+  });
+
+  test("releases quota when artifact verification fails before inference", async () => {
+    let releases = 0;
+    const store: TenantQuotaStore = {
+      ...unlimitedQuotaStore,
+      release: async (schemaName) => {
+        expect(schemaName).toBe("tenant_ampersand_dev");
+        releases += 1;
+      },
+    };
+    const routes = createPredictionRoutes({
+      ...unlimitedQuotaDependencies,
+      getQuotaStore: () => store,
+      withTransaction: runWithoutDatabase,
+      validatePrediction: async () => ({
+        kind: "accepted",
+        toolDefinitionId: "33333333-3333-4333-8333-333333333333",
+        modelVersionId,
+        modelVersion: 1,
+        inputs: validRequest.inputs,
+        warnings: [],
+      }),
+      verifyArtifact: async () => ({
+        ok: false,
+        reason: "CHECKSUM_MISMATCH",
+        message: "internal verification detail",
+      }),
+    });
+
+    await routes.handle(
+      new Request(predictionUrl, {
+        method: "POST",
+        headers: authorizedHeaders,
+        body: JSON.stringify(validRequest),
+      }),
+    );
+
+    expect(releases).toBe(1);
+  });
+
+  test("keeps quota consumed after inference starts", async () => {
+    let releases = 0;
+    const store: TenantQuotaStore = {
+      ...unlimitedQuotaStore,
+      release: async () => {
+        releases += 1;
+      },
+    };
+    const routes = createPredictionRoutes({
+      ...unlimitedQuotaDependencies,
+      getQuotaStore: () => store,
+      withTransaction: runWithoutDatabase,
+      validatePrediction: async () => ({
+        kind: "accepted",
+        toolDefinitionId: "33333333-3333-4333-8333-333333333333",
+        modelVersionId,
+        modelVersion: 1,
+        inputs: validRequest.inputs,
+        warnings: [],
+      }),
+      verifyArtifact: async () => ({
+        ok: true,
+        actualSha256: "0".repeat(64),
+        bytes: verifiedArtifactBytes,
+      }),
+      listFeatures: async () => onnxFeatures,
+      runInference: async () => {
+        throw new Error("Inference failed");
+      },
+    });
+
+    await routes.handle(
+      new Request(predictionUrl, {
+        method: "POST",
+        headers: authorizedHeaders,
+        body: JSON.stringify(validRequest),
+      }),
+    );
+
+    expect(releases).toBe(0);
   });
 
   test("rejects a malformed request body", async () => {
