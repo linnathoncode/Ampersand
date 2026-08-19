@@ -228,3 +228,99 @@ class TrainingSplitBoundaryInvalidError(TrainingSplitError):
     """A chronological split cannot separate test rows without leaking time."""
 
     code = "TRAINING_SPLIT_BOUNDARY_INVALID"
+
+
+class TrainingError(WorkerError):
+    """Base class for real regression training failures."""
+
+    code = "TRAINING_ERROR"
+
+
+class TrainingInsufficientRowsError(TrainingError):
+    """The split does not provide enough rows to fit or evaluate a model."""
+
+    code = "TRAINING_INSUFFICIENT_ROWS"
+
+
+class TrainingTargetMissingError(TrainingError):
+    """The trusted target column is absent from the training or test table."""
+
+    code = "TRAINING_TARGET_MISSING"
+
+
+class TrainingTargetNullError(TrainingError):
+    """The numeric target contains missing values that cannot be imputed."""
+
+    code = "TRAINING_TARGET_NULL"
+
+
+class TrainingTargetNonFiniteError(TrainingError):
+    """The numeric target contains a non-finite value."""
+
+    code = "TRAINING_TARGET_NON_FINITE"
+
+
+class TrainingTargetConstantError(TrainingError):
+    """The target is constant and cannot support a meaningful regression."""
+
+    code = "TRAINING_TARGET_CONSTANT"
+
+
+class TrainingNoFeaturesError(TrainingError):
+    """No usable feature columns remain after trusted feature resolution."""
+
+    code = "TRAINING_NO_FEATURES"
+
+
+class TrainingPreprocessingError(TrainingError):
+    """Feature preprocessing or input conversion failed."""
+
+    code = "TRAINING_PREPROCESSING"
+
+
+class TrainingFitError(TrainingError):
+    """The regression estimator could not be fitted to the training split."""
+
+    code = "TRAINING_FIT_FAILED"
+
+
+class TrainingMetricsInvalidError(TrainingError):
+    """Produced evaluation metrics are non-finite or otherwise invalid."""
+
+    code = "TRAINING_METRICS_INVALID"
+
+
+class TrainingOnnxError(TrainingError):
+    """Base class for ONNX conversion and runtime validation failures."""
+
+    code = "TRAINING_ONNX_ERROR"
+
+
+class TrainingOnnxConversionError(TrainingOnnxError):
+    """The fitted pipeline could not be converted into an ONNX payload."""
+
+    code = "TRAINING_ONNX_CONVERSION_FAILED"
+
+
+class TrainingOnnxRuntimeInvalidError(TrainingOnnxError):
+    """The produced ONNX payload does not load in the ONNX runtime."""
+
+    code = "TRAINING_ONNX_RUNTIME_INVALID"
+
+
+class TrainingOnnxInputInvalidError(TrainingOnnxError):
+    """The ONNX payload does not expose the expected model inputs."""
+
+    code = "TRAINING_ONNX_INPUT_INVALID"
+
+
+class TrainingOnnxOutputInvalidError(TrainingOnnxError):
+    """The ONNX payload does not produce the expected model output."""
+
+    code = "TRAINING_ONNX_OUTPUT_INVALID"
+
+
+class TrainingOnnxPredictionMismatchError(TrainingOnnxError):
+    """ONNX predictions differ from the fitted Python pipeline beyond tolerance."""
+
+    code = "TRAINING_ONNX_PREDICTION_MISMATCH"

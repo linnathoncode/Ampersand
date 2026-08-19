@@ -143,7 +143,14 @@ def dependency_versions() -> dict[str, str]:
     worker environment.
     """
     versions: dict[str, str] = {"python": platform.python_version()}
-    for package in ("pyarrow", "pydantic"):
+    for package in (
+        "pyarrow",
+        "pydantic",
+        "scikit-learn",
+        "pandas",
+        "numpy",
+        "joblib",
+    ):
         versions[package] = _resolve_package_version(package)
     return versions
 
