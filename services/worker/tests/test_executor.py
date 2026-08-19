@@ -89,7 +89,7 @@ def valid_context(snapshot):
     )
 
 
-def test_valid_job_succeeds_and_cleans_fake_artifact(tmp_path):
+def test_valid_job_succeeds_and_cleans_temporary_artifact(tmp_path):
     snapshot = make_snapshot_file(tmp_path)
     database = StubDatabase(valid_context(snapshot))
 
@@ -101,7 +101,7 @@ def test_valid_job_succeeds_and_cleans_fake_artifact(tmp_path):
         65,
         80,
     ]
-    assert list(tmp_path.glob("*.fake.onnx")) == []
+    assert list(tmp_path.glob("*.onnx.tmp")) == []
 
 
 def test_no_time_column_job_succeeds(tmp_path):
@@ -169,7 +169,7 @@ def test_missing_timestamps_mark_job_failed(tmp_path):
         database.transitions[-1]["error_code"]
         == "SNAPSHOT_TIME_VALUE_MISSING"
     )
-    assert list(tmp_path.glob("*.fake.onnx")) == []
+    assert list(tmp_path.glob("*.onnx.tmp")) == []
 
 
 def test_checksum_failure_marks_job_failed(tmp_path):

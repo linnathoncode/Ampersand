@@ -3,8 +3,9 @@
 The executor runs only after the lifecycle has claimed a job with
 ``FOR UPDATE SKIP LOCKED``. It loads trusted job, snapshot, and dataset
 metadata from the tenant schema, verifies the snapshot checksum, validates the
-Parquet data against the trusted definition, runs the deterministic fake
-trainer, validates the result against the private contract, and reaches a
+Parquet data against the trusted definition, splits it into reproducible
+train and test partitions, fits a real regression pipeline with a naive
+baseline, validates the result against the private contract, and reaches a
 terminal state. All lifecycle writes remain ownership-guarded; a job that was
 cancelled or moved by Nucleus in the meantime is never overwritten.
 """
@@ -37,7 +38,7 @@ from .errors import (
     SnapshotTargetInvalidError,
     WorkerError,
 )
-from .fake_trainer import FakeTrainer, validate_fake_result
+from .regression_trainer import RegressionTrainer, validate_regression_result
 from .snapshots import resolve_snapshot_path, verify_snapshot_file
 from .splitting import load_snapshot_table, split_dataset
 
@@ -49,9 +50,9 @@ SNAPSHOT_VERIFIED_PROGRESS_MESSAGE = "Snapshot verified; validating dataset sche
 SPLIT_PROGRESS_PERCENT = 65
 SPLIT_PROGRESS_MESSAGE = "Dataset split and preprocessing completed"
 TRAINING_PROGRESS_PERCENT = 80
-TRAINING_PROGRESS_MESSAGE = "Running deterministic fake training; no model registered"
+TRAINING_PROGRESS_MESSAGE = "Fitting the regression model on the training split"
 SUCCESS_PROGRESS_PERCENT = 100
-SUCCESS_PROGRESS_MESSAGE = "Fake training completed; no model registered"
+SUCCESS_PROGRESS_MESSAGE = "Regression training completed; no model registered"
 FAILED_PROGRESS_MESSAGE = "Training job failed"
 
 _MAX_ERROR_MESSAGE_LENGTH = 500
@@ -142,7 +143,7 @@ class JobExecutor:
     ) -> None:
         self._config = config
         self._database = database
-        self._fake_trainer = FakeTrainer(config.artifact_storage_path)
+        self._trainer = RegressionTrainer(config.artifact_storage_path)
         self._logger = logging.getLogger("worker.executor")
         self._progress_percent = 0
         self._progress_message = CLAIMED_TRAINING_JOB_PROGRESS_MESSAGE
@@ -225,13 +226,15 @@ class JobExecutor:
             )
             self._check_runtime()
 
-            output = self._fake_trainer.train(
+            output = self._trainer.train(
                 worker_input, dataset, split, on_progress=heartbeat
             )
             try:
                 self._check_runtime()
-                validate_fake_result(
-                    self._config.worker_id, worker_input, output.success_payload
+                validate_regression_result(
+                    self._config.worker_id,
+                    worker_input,
+                    output.success_payload,
                 )
                 self._update_progress(
                     job,

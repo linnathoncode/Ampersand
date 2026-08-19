@@ -19,6 +19,7 @@ from worker.contracts import (
     build_worker_input as build_contract_worker_input,
 )
 from worker.database import DatasetColumn, JobExecutionContext
+from worker.dataset_validation import TrustedColumn, validate_snapshot_dataset
 from worker.splitting import load_snapshot_table as load_table
 
 FINGERPRINT = "a" * 64
@@ -197,3 +198,32 @@ def _contract_worker_input(
 
 def fresh_job_id() -> str:
     return str(uuid4())
+
+
+def trusted_columns(context: JobExecutionContext) -> tuple[TrustedColumn, ...]:
+    """Convert a trusted execution context into validation columns."""
+    return tuple(
+        TrustedColumn(
+            name=column.name,
+            role=column.role,
+            data_type=column.data_type,
+            is_nullable=column.is_nullable,
+            position=column.position,
+        )
+        for column in context.columns
+    )
+
+
+def validated_dataset(
+    snapshot_path: Path,
+    context: JobExecutionContext,
+    *,
+    max_rows: int = 100_000,
+):
+    """Validate a snapshot file against a trusted execution context."""
+    return validate_snapshot_dataset(
+        snapshot_path,
+        trusted_columns(context),
+        expected_row_count=context.snapshot_row_count,
+        max_rows=max_rows,
+    )

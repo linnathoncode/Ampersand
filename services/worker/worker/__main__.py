@@ -1,7 +1,7 @@
 """Entrypoint for the private worker (``python -m worker``).
 
 The worker connects directly to PostgreSQL and never starts an HTTP server.
-It claims queued training jobs, executes them through the deterministic fake
+It claims queued training jobs, executes them through the real regression
 trainer, and reaches a terminal state before polling for the next job.
 """
 
