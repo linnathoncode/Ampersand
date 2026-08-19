@@ -32,5 +32,13 @@ while (remainingEntities.size > 0) {
 
 await writeFile(
   join(sourceDirectory, 'config.json'),
-  `${JSON.stringify({ ...baseConfig, entities }, null, 2)}\n`,
+  `${JSON.stringify(
+    {
+      $schema: '../node_modules/nucleus-core-ts/schemas/config.nucleus.json',
+      ...baseConfig,
+      entities,
+    },
+    null,
+    2,
+  )}\n`,
 );

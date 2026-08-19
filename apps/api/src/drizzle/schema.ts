@@ -948,6 +948,8 @@ export const modelVersionsColumns = {
 	baselineMetrics: jsonb('baseline_metrics').notNull(),
 	publishedAt: timestamp('published_at', { withTimezone: true }),
 	publishedBy: uuid('published_by').references(() => users.id, { onDelete: 'set null' }),
+	retiredAt: timestamp('retired_at', { withTimezone: true }),
+	retiredBy: uuid('retired_by'),
 };
 
 export const modelVersions = pgTable('model_versions', modelVersionsColumns);

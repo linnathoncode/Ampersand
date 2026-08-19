@@ -46,6 +46,9 @@ export const ModelVersionSummaryDto = Type.Object(
       Type.String({ format: "date-time" }),
       Type.Null(),
     ]),
+    retiredBy: Type.Union([Type.String({ format: "uuid" }), Type.Null()]),
+    retiredAt: Type.Union([Type.String({ format: "date-time" }), Type.Null()]),
+
     createdAt: Type.String({ format: "date-time" }),
   },
   { additionalProperties: false },

@@ -1,5 +1,4 @@
 {
-  "$schema": "../node_modules/nucleus-core-ts/schemas/config.nucleus.json",
   "appId": "ampersand-api",
   "mode": "development",
   "database": {
@@ -80,6 +79,12 @@
           "description": "Publish candidate model versions"
         },
         {
+          "action": "retire",
+          "path": "model_versions",
+          "method": "POST",
+          "description": "Retire published model versions"
+        },
+        {
           "action": "create",
           "path": "dataset_definitions",
           "method": "POST",
@@ -103,6 +108,7 @@
           "role": "model-publisher",
           "claims": [
             "publish.model_versions",
+            "retire.model_versions",
             "generate.tool_definitions"
           ]
         },

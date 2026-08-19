@@ -2,6 +2,7 @@ import type {
   ModelVersionStatus,
   ModelVersionSummary,
   PublishModelVersionResponse,
+  RetireModelVersionResponse,
 } from "@ampersand/contracts";
 
 import { desc, eq, and } from "drizzle-orm";
@@ -29,6 +30,8 @@ export async function listModelVersions(
       parentVersionId: modelVersions.parentVersionId,
       publishedAt: modelVersions.publishedAt,
       publishedBy: modelVersions.publishedBy,
+      retiredAt: modelVersions.retiredAt,
+      retiredBy: modelVersions.retiredBy,
       createdAt: modelVersions.createdAt,
     })
     .from(modelVersions)
@@ -39,6 +42,7 @@ export async function listModelVersions(
     ...row,
     status: parseModelVersionStatus(row.status),
     publishedAt: row.publishedAt?.toISOString() ?? null,
+    retiredAt: row.retiredAt?.toISOString() ?? null,
     createdAt: row.createdAt.toISOString(),
   }));
 }
@@ -98,6 +102,53 @@ export async function publishModelVersion(
     versionNumber: publishedModel.versionNumber,
     status: "published",
     publishedAt: publishedModel.publishedAt.toISOString(),
+  };
+}
+
+export async function retireModelVersion(
+  client: PoolClient,
+  schemaName: string,
+  modelVersionId: string,
+  retiredBy: string,
+): Promise<RetireModelVersionResponse | null> {
+  const tenantSchema = pgSchema(schemaName);
+  const modelVersions = createModelVersionsForSchema(tenantSchema);
+  const database = drizzle(client);
+  const retiredAt = new Date();
+
+  const rows = await database
+    .update(modelVersions)
+    .set({
+      status: "retired",
+      retiredAt,
+      retiredBy,
+      updatedAt: retiredAt,
+      updatedBy: retiredBy,
+    })
+    .where(
+      and(
+        eq(modelVersions.id, modelVersionId),
+        eq(modelVersions.status, "published"),
+        eq(modelVersions.isActive, true),
+      ),
+    )
+    .returning({
+      id: modelVersions.id,
+      versionNumber: modelVersions.versionNumber,
+      retiredAt: modelVersions.retiredAt,
+    });
+
+  const retiredModel = rows[0];
+
+  if (!retiredModel?.retiredAt) {
+    return null;
+  }
+
+  return {
+    id: retiredModel.id,
+    versionNumber: retiredModel.versionNumber,
+    status: "retired",
+    retiredAt: retiredModel.retiredAt.toISOString(),
   };
 }
 

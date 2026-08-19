@@ -9,6 +9,9 @@ import {
   isModelVersionTransitionAllowed,
   ModelRegistryResponseDto,
   ModelPublicationErrorDto,
+  ModelRetirementErrorDto,
+  RetireModelVersionParamsDto,
+  RetireModelVersionResponseDto,
 } from "./index";
 
 describe("model publication contracts", () => {
@@ -50,9 +53,34 @@ describe("model publication contracts", () => {
             parentVersionId: null,
             publishedAt: null,
             publishedBy: null,
+            retiredAt: null,
+            retiredBy: null,
             createdAt: timestamp,
           },
         ],
+      }),
+    ).toBe(true);
+  });
+
+  it("accepts model retirement data", () => {
+    expect(
+      Value.Check(RetireModelVersionParamsDto, { modelVersionId: uuid }),
+    ).toBe(true);
+    expect(
+      Value.Check(RetireModelVersionResponseDto, {
+        id: uuid,
+        versionNumber: 1,
+        status: "retired",
+        retiredAt: timestamp,
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(ModelRetirementErrorDto, {
+        error: {
+          code: "INVALID_MODEL_TRANSITION",
+          message: "Only published models can be retired",
+          currentStatus: "candidate",
+        },
       }),
     ).toBe(true);
   });

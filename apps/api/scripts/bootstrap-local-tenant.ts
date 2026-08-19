@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import pg from "pg";
 
@@ -29,23 +29,43 @@ try {
     const body = await response.json();
 
     if (!response.ok || !body.success) {
-      throw new Error(`Nucleus tenant provisioning failed: ${JSON.stringify(body)}`);
+      throw new Error(
+        `Nucleus tenant provisioning failed: ${JSON.stringify(body)}`,
+      );
     }
 
     tenant = await findTenant(subdomain);
   }
 
-  if (!tenant) throw new Error("Nucleus did not register the provisioned tenant");
+  if (!tenant)
+    throw new Error("Nucleus did not register the provisioned tenant");
   assertIdentifier(tenant.schema_name);
 
-  const migrationPath = join(import.meta.dir, "..", "migrations", "0001_ampersand_constraints.sql");
-  const migration = await readFile(migrationPath, "utf8");
+  const migrationDirectory = join(import.meta.dir, "..", "migrations");
+  const migrationNames = (await readdir(migrationDirectory))
+    .filter((name) => name.endsWith(".sql"))
+    .sort();
+
+  if (migrationNames.length === 0) {
+    throw new Error("No database migrations were found");
+  }
+
+  const migrations = await Promise.all(
+    migrationNames.map(async (name) => ({
+      name,
+      sql: await readFile(join(migrationDirectory, name), "utf8"),
+    })),
+  );
+
   const client = await pool.connect();
 
   try {
     await client.query("BEGIN");
     await client.query(`SET LOCAL search_path TO "${tenant.schema_name}"`);
-    await client.query(migration);
+    for (const migration of migrations) {
+      await client.query(migration.sql);
+      console.log(`Applied migration: ${migration.name}`);
+    }
     await client.query("COMMIT");
   } catch (error) {
     await client.query("ROLLBACK");
@@ -59,7 +79,9 @@ try {
   await pool.end();
 }
 
-async function findTenant(tenantSubdomain: string): Promise<{ schema_name: string } | null> {
+async function findTenant(
+  tenantSubdomain: string,
+): Promise<{ schema_name: string } | null> {
   const result = await pool.query<{ schema_name: string }>(
     "SELECT schema_name FROM main.tenants WHERE subdomain = $1 AND status = 'active'",
     [tenantSubdomain],
