@@ -53,7 +53,11 @@ class RegressionTrainingOutput:
     """The validated success payload, temporary artifact, and fitted pipeline.
 
     ``model_predictions`` and ``baseline_predictions`` are the test-partition
-    outputs used to compute the metrics.
+    outputs used to compute the metrics. ``uncertainty`` is the training-side
+    regression uncertainty estimate: the held-out model RMSE, which measures
+    the expected prediction error scale in target units. It is carried on the
+    training output for validation and documentation and is not a worker-result
+    contract field; RMSE is already reported inside ``metrics``.
     """
 
     success_payload: dict
@@ -61,6 +65,7 @@ class RegressionTrainingOutput:
     pipeline: Pipeline
     model_predictions: np.ndarray
     baseline_predictions: np.ndarray
+    uncertainty: float
 
 
 class RegressionTrainer:
@@ -108,6 +113,7 @@ class RegressionTrainer:
         baseline_metrics = _evaluate(y_test, baseline_predictions)
         _validate_finite_metrics(metrics)
         _validate_finite_metrics(baseline_metrics)
+        uncertainty = _uncertainty_estimate(metrics)
 
         features = [
             _feature_metadata(dataset, feature) for feature in worker_input.features
@@ -136,6 +142,7 @@ class RegressionTrainer:
             pipeline=pipeline,
             model_predictions=model_predictions,
             baseline_predictions=baseline_predictions,
+            uncertainty=uncertainty,
         )
 
 
@@ -328,6 +335,28 @@ def _validate_finite_metrics(metrics: dict) -> None:
         raise TrainingMetricsInvalidError(
             "Training produced non-finite metrics"
         )
+
+
+def _uncertainty_estimate(metrics: dict) -> float:
+    """Resolve the training-side regression uncertainty estimate.
+
+    The held-out model RMSE is used as the model's global uncertainty
+    estimate. It measures the expected prediction error scale in target units
+    and is meaningful for every regression prediction. It is not a calibrated
+    per-input confidence interval. The estimate must be finite and
+    non-negative before it can be reported.
+    """
+    rmse = metrics.get("rmse")
+    if (
+        not isinstance(rmse, (int, float))
+        or isinstance(rmse, bool)
+        or not math.isfinite(float(rmse))
+        or float(rmse) < 0.0
+    ):
+        raise TrainingMetricsInvalidError(
+            "Training produced an invalid uncertainty estimate"
+        )
+    return float(rmse)
 
 
 def _feature_metadata(dataset: ValidatedDataset, feature) -> dict:
