@@ -15,7 +15,7 @@ before a success result is produced:
 
 The produced file is named as a temporary, non-registerable output and is
 removed whenever any conversion or validation step fails. Persisting it as an
-immutable model artifact is a later-day responsibility.
+immutable model artifact is handled by a separate registration step.
 """
 
 from __future__ import annotations
@@ -61,7 +61,23 @@ def convert_and_verify(
     result. Any failure removes the temporary file before the structured error
     propagates.
     """
+    if not worker_input.features:
+        raise TrainingOnnxConversionError(
+            "The fitted pipeline has no features to convert"
+        )
+    if feature_frame is None or getattr(feature_frame, "shape", None) is None:
+        raise TrainingOnnxInputInvalidError(
+            "Test feature frame is missing or has no shape"
+        )
+    if feature_frame.shape[0] == 0:
+        raise TrainingOnnxInputInvalidError(
+            "Test feature frame contains no rows"
+        )
     initial_types = _initial_types(worker_input)
+    if not initial_types:
+        raise TrainingOnnxConversionError(
+            "No ONNX initial types could be derived from the trusted features"
+        )
     try:
         converted = convert_sklearn(pipeline, initial_types=initial_types)
         onnx_bytes = converted.SerializeToString()
@@ -69,6 +85,11 @@ def convert_and_verify(
         raise TrainingOnnxConversionError(
             "The fitted pipeline could not be converted into an ONNX payload"
         ) from exc
+
+    if not onnx_bytes or len(onnx_bytes) == 0:
+        raise TrainingOnnxConversionError(
+            "The ONNX conversion produced an empty payload"
+        )
 
     path = _unique_temporary_path(worker_input, output_directory)
     try:
@@ -83,6 +104,7 @@ def convert_and_verify(
         session = ort.InferenceSession(
             onnx_bytes, providers=["CPUExecutionProvider"]
         )
+        _validate_onnx_interface(session, worker_input)
         onnx_predictions = _run_verified_session(
             session, worker_input, feature_frame
         )
@@ -102,6 +124,11 @@ def convert_and_verify(
         "contentSha256": hashlib.sha256(onnx_bytes).hexdigest(),
         "sizeBytes": len(onnx_bytes),
     }
+    if artifact["sizeBytes"] < 1:
+        path.unlink(missing_ok=True)
+        raise TrainingOnnxConversionError(
+            "The ONNX payload has an invalid size"
+        )
     return path, artifact
 
 
@@ -120,12 +147,17 @@ def _initial_types(worker_input: TrainingWorkerInput) -> list[tuple[str, Any]]:
     return initial_types
 
 
-def _run_verified_session(
+def _validate_onnx_interface(
     session: ort.InferenceSession,
     worker_input: TrainingWorkerInput,
-    feature_frame: Any,
-) -> np.ndarray:
-    """Run the ONNX payload on the test partition and validate its interface."""
+) -> None:
+    """Validate ONNX input names, types, and shapes against trusted features.
+
+    Checks that input order matches ``worker_input.features``, that categorical
+    inputs are string tensors and numeric inputs are float/double/int64, and
+    that each input exposes a 2-D shape ``[None, 1]`` (or equivalent dynamic
+    first dimension). Also validates there is exactly one 2-D output ``[N,1]``.
+    """
     expected_names = [feature.name for feature in worker_input.features]
     actual_names = [item.name for item in session.get_inputs()]
     if actual_names != expected_names:
@@ -145,6 +177,65 @@ def _run_verified_session(
             raise TrainingOnnxInputInvalidError(
                 f"ONNX input '{feature.name}' is not numeric"
             )
+        _validate_input_shape(item)
+    outputs = session.get_outputs()
+    if len(outputs) != 1:
+        raise TrainingOnnxOutputInvalidError(
+            "The ONNX model must return exactly one output"
+        )
+    _validate_output_shape(outputs[0])
+
+
+def _validate_input_shape(item: Any) -> None:
+    shape = getattr(item, "shape", None)
+    if shape is None or len(shape) != 2:
+        raise TrainingOnnxInputInvalidError(
+            f"ONNX input '{item.name}' must have shape [None, 1]"
+        )
+    if shape[1] != 1:
+        raise TrainingOnnxInputInvalidError(
+            f"ONNX input '{item.name}' must have shape [None, 1]"
+        )
+    batch_dim = shape[0]
+    # Batch dimension must be dynamic: None, -1, or symbolic string.
+    # Fixed numeric batch sizes (e.g. 1, 8, 32) are rejected to prevent
+    # single-row test data from masking multi-row inference failures.
+    if isinstance(batch_dim, int):
+        if batch_dim != -1:
+            raise TrainingOnnxInputInvalidError(
+                f"ONNX input '{item.name}' has a fixed batch dimension; expected dynamic [None, 1]"
+            )
+    elif batch_dim is None:
+        pass
+    elif isinstance(batch_dim, str):
+        if not batch_dim:
+            raise TrainingOnnxInputInvalidError(
+                f"ONNX input '{item.name}' must have shape [None, 1]"
+            )
+    else:
+        raise TrainingOnnxInputInvalidError(
+            f"ONNX input '{item.name}' must have shape [None, 1]"
+        )
+
+
+def _validate_output_shape(item: Any) -> None:
+    shape = getattr(item, "shape", None)
+    if shape is None or len(shape) != 2:
+        raise TrainingOnnxOutputInvalidError(
+            "The ONNX model output must have shape [N, 1]"
+        )
+    if shape[1] != 1:
+        raise TrainingOnnxOutputInvalidError(
+            "The ONNX model output must have shape [N, 1]"
+        )
+
+
+def _run_verified_session(
+    session: ort.InferenceSession,
+    worker_input: TrainingWorkerInput,
+    feature_frame: Any,
+) -> np.ndarray:
+    """Run the ONNX payload on the test partition and validate its interface."""
 
     feed = {}
     for feature in worker_input.features:
