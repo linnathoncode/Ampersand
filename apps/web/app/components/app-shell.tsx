@@ -5,7 +5,7 @@ import type { ReactNode } from "react";
 
 type AppShellProps = {
   activeTab: "selection" | "controls";
-  activeSection?: "models" | "tools";
+  activeSection?: "chat" | "models" | "tools";
   breadcrumb: string;
   children: ReactNode;
   controlsHref?: string;
@@ -64,6 +64,7 @@ export function AppShell({ activeTab, activeSection = "models", breadcrumb, chil
         </a>
         <nav className="primary-nav" aria-label="Primary navigation">
           <a href="#">Overview</a>
+          <a className={activeSection === "chat" ? "active" : ""} href="/chat">Conversation</a>
           <a className={activeSection === "models" ? "active" : ""} href="/">Model controls</a>
           <a href="#">Datasets</a>
           <a className={activeSection === "tools" ? "active" : ""} href="/tools">Prediction tools</a>

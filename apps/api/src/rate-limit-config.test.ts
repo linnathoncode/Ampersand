@@ -6,6 +6,9 @@ type RateLimitConfig = {
     enabled?: boolean;
     strategy?: string;
     failClosed?: boolean;
+    authRoutes?: {
+      login?: { window?: string; max?: number; blockDuration?: string };
+    };
     privateRoutes?: { window?: string; max?: number };
     byIp?: boolean;
     byUserId?: boolean;
@@ -23,6 +26,13 @@ describe("Nucleus rate-limit configuration", () => {
       enabled: true,
       strategy: "sliding-window",
       failClosed: true,
+      authRoutes: {
+        login: {
+          window: "1m",
+          max: 30,
+          blockDuration: "1m",
+        },
+      },
       privateRoutes: {
         window: "1m",
         max: 60,

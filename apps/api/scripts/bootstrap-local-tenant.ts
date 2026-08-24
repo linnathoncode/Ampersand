@@ -41,6 +41,19 @@ try {
     throw new Error("Nucleus did not register the provisioned tenant");
   assertIdentifier(tenant.schema_name);
 
+  await pool.query(
+    "UPDATE main.tenants SET trusted_sources = $1::jsonb WHERE subdomain = $2",
+    [
+      JSON.stringify([
+        {
+          allow_header_auth: true,
+          allowed_services: ["ampersand-web"],
+        },
+      ]),
+      subdomain,
+    ],
+  );
+
   const migrationDirectory = join(import.meta.dir, "..", "migrations");
   const migrationNames = (await readdir(migrationDirectory))
     .filter((name) => name.endsWith(".sql"))

@@ -30,7 +30,7 @@ export function getAuthContext(headers: Headers): AuthContext | null {
 }
 
 export function hasClaim(context: AuthContext, requiredClaim: string): boolean {
-  return context.claims.includes(requiredClaim);
+  return context.claims.includes("*") || context.claims.includes(requiredClaim);
 }
 
 function decodeClaims(header: string | null): string[] {

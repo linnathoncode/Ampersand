@@ -16,9 +16,11 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@ai-sdk/openai": "^4.0.46",
     "@ampersand/contracts": "workspace:*",
     "@elysiajs/cors": "1.4.2",
     "@sinclair/typebox": "0.34.52",
+    "ai": "^7.0.77",
     "apache-arrow": "^21.2.0",
     "drizzle-orm": "0.45.2",
     "elysia": "1.4.29",

@@ -13,6 +13,13 @@
     "strategy": "sliding-window",
     "keyPrefix": "ampersand:rate-limit:",
     "failClosed": true,
+    "authRoutes": {
+      "login": {
+        "window": "1m",
+        "max": 30,
+        "blockDuration": "1m"
+      }
+    },
     "privateRoutes": {
       "window": "1m",
       "max": 60
@@ -43,7 +50,8 @@
       "secret": "SESSION_TOKEN_SECRET"
     },
     "login": {
-      "enabled": true
+      "enabled": true,
+      "isPublic": true
     },
     "register": {
       "enabled": false
