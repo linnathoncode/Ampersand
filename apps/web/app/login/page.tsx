@@ -14,7 +14,7 @@ export default function LoginPage() {
 
   return (
     <main className="login-page">
-      <section className="login-brand" aria-label="Ampersand">
+      <section className="login-brand" aria-label="ampersand">
         <span>&amp;</span>
         <strong>ampersand</strong>
       </section>

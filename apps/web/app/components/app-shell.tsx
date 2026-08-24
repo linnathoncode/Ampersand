@@ -58,7 +58,7 @@ export function AppShell({ activeTab, activeSection = "models", breadcrumb, chil
   return (
     <div className="app-shell">
       <aside className="sidebar">
-        <a className="brand" href="/" aria-label="Ampersand home">
+        <a className="brand" href="/" aria-label="ampersand home">
           <span className="brand-mark">&amp;</span>
           <span className="brand-name">ampersand</span>
         </a>
