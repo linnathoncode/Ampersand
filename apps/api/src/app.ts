@@ -2,8 +2,9 @@ import { cors } from "@elysiajs/cors";
 import { Elysia } from "elysia";
 import { NucleusElysiaPlugin } from "nucleus-core-ts";
 
-import { datasetRoutes } from "./dataset/routes";
 import { chatRoutes } from "./chat/routes";
+import { datasetRoutes } from "./dataset/routes";
+import { internalRoutes } from "./internal/routes";
 import { modelRoutes } from "./model/routes";
 import { predictionRoutes } from "./prediction/routes";
 import { toolDefinitionRoutes } from "./tool-definitions/routes";
@@ -30,5 +31,6 @@ export async function createApp() {
     .use(datasetRoutes)
     .use(toolDefinitionRoutes)
     .use(predictionRoutes)
-    .use(trainingRoutes);
+    .use(trainingRoutes)
+    .use(internalRoutes);
 }

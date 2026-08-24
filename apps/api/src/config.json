@@ -134,7 +134,10 @@
           ]
         }
       ]
-    }
+    },
+    "publicPaths": [
+      "POST /internal/training-jobs/:jobId/result"
+    ]
   },
   "entities": [
     {

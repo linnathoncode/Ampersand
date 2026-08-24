@@ -28,10 +28,13 @@ venv/
 artifacts/*
 !artifacts/.gitkeep
 *.onnx
+*.onnx.tmp
 *.joblib
 *.pkl
 *.pickle
 data/
+.tmp/
+apps/api/artifacts/
 
 # Logs and runtime state
 *.log
