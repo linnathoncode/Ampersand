@@ -1,4 +1,12 @@
-import type { ModelVersionStatus, ModelVersionSummary } from "@ampersand/contracts";
+import type {
+  ModelRegistryResponse,
+  ModelVersionStatus,
+  ModelVersionSummary,
+  PublishModelVersionResponse,
+  RetireModelVersionResponse,
+} from "@ampersand/contracts";
+
+import { createTenantHeaders, nucleusUrl } from "./auth/client";
 
 export type ModelDefinition = {
   slug: string;
@@ -9,23 +17,130 @@ export type ModelDefinition = {
   lastTrainedAt: string;
 };
 
-export const modelDefinitions: ModelDefinition[] = [
-  { slug: "energy-usage-predictor", name: "Energy usage predictor", target: "energy_usage", availableTools: 1, latestStatus: "candidate", lastTrainedAt: "2026-08-20T08:42:00.000Z" },
-  { slug: "demand-forecast", name: "Demand forecast", target: "weekly_demand", availableTools: 1, latestStatus: "published", lastTrainedAt: "2026-08-18T13:20:00.000Z" },
-  { slug: "maintenance-risk", name: "Maintenance risk", target: "failure_risk", availableTools: 0, latestStatus: "candidate", lastTrainedAt: "2026-08-16T09:05:00.000Z" },
-];
-
 export type RegistryModelVersion = ModelVersionSummary & {
   toolAvailability: "not-generated" | "available" | "unavailable";
 };
 
-export const sampleModelVersions: RegistryModelVersion[] = [
-  { id: "c90cf8e2-baa5-4e54-8f1a-2f3fb82ea808", datasetDefinitionId: "8dad1b60-c251-4b19-8c7d-0f70b0367ef0", trainingJobId: "fe561ed9-9eca-450c-a9b5-b3ed8c184042", versionNumber: 3, status: "candidate", toolAvailability: "not-generated", parentVersionId: "7508315f-6f4c-43ce-a5be-8268f5789369", publishedBy: null, publishedAt: null, retiredBy: null, retiredAt: null, createdAt: "2026-08-20T08:42:00.000Z" },
-  { id: "7508315f-6f4c-43ce-a5be-8268f5789369", datasetDefinitionId: "8dad1b60-c251-4b19-8c7d-0f70b0367ef0", trainingJobId: "730e1566-aea5-4238-aaf8-c8bd5b92f243", versionNumber: 2, status: "published", toolAvailability: "available", parentVersionId: "2cf1a2a7-8c78-4105-993a-3f502fb59785", publishedBy: "0a5c53d3-77f1-436a-acf8-875af23ea54f", publishedAt: "2026-08-12T10:15:00.000Z", retiredBy: null, retiredAt: null, createdAt: "2026-08-12T09:58:00.000Z" },
-  { id: "2cf1a2a7-8c78-4105-993a-3f502fb59785", datasetDefinitionId: "8dad1b60-c251-4b19-8c7d-0f70b0367ef0", trainingJobId: "a8e50fc4-868b-4894-9859-2ea8c221555f", versionNumber: 1, status: "retired", toolAvailability: "unavailable", parentVersionId: null, publishedBy: "0a5c53d3-77f1-436a-acf8-875af23ea54f", publishedAt: "2026-08-04T11:20:00.000Z", retiredBy: "0a5c53d3-77f1-436a-acf8-875af23ea54f", retiredAt: "2026-08-12T10:15:00.000Z", createdAt: "2026-08-04T10:52:00.000Z" },
-];
+type DiscoverableTool = { modelVersionId: string };
+
+export function modelSlug(name: string): string {
+  return name
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "");
+}
+
+export function modelName(model: ModelVersionSummary): string {
+  return model.datasetName ?? `Model ${model.id.slice(0, 8)}`;
+}
+
+export function getModelDefinitions(
+  models: RegistryModelVersion[],
+): ModelDefinition[] {
+  const definitions = new Map<string, ModelDefinition>();
+
+  for (const model of models) {
+    const name = modelName(model);
+    const target = model.targetColumn ?? "Prediction";
+    const slug = modelSlug(name);
+
+    if (!definitions.has(slug)) {
+      definitions.set(slug, {
+        slug,
+        name,
+        target,
+        availableTools: models.filter(
+          (candidate) =>
+            modelSlug(modelName(candidate)) === slug &&
+            candidate.toolAvailability === "available",
+        ).length,
+        latestStatus: model.status,
+        lastTrainedAt: model.createdAt,
+      });
+    }
+  }
+
+  return [...definitions.values()];
+}
+
+export async function fetchModelRegistry(
+  tenant: string,
+): Promise<RegistryModelVersion[]> {
+  const headers = createTenantHeaders(tenant);
+  const [modelsResponse, toolsResponse] = await Promise.all([
+    fetch(`${nucleusUrl}/model-versions`, {
+      credentials: "include",
+      headers,
+      cache: "no-store",
+    }),
+    fetch(`${nucleusUrl}/tools`, {
+      credentials: "include",
+      headers,
+      cache: "no-store",
+    }),
+  ]);
+
+  if (!modelsResponse.ok) {
+    throw new Error(await getApiError(modelsResponse, "Could not load models"));
+  }
+
+  const registry = (await modelsResponse.json()) as ModelRegistryResponse;
+  const discoverableTools = toolsResponse.ok
+    ? ((await toolsResponse.json()) as DiscoverableTool[])
+    : [];
+  const toolModelIds = new Set(
+    discoverableTools.map((tool) => tool.modelVersionId),
+  );
+
+  return registry.models.map((model) => ({
+    ...model,
+    toolAvailability:
+      model.status === "retired"
+        ? "unavailable"
+        : toolModelIds.has(model.id)
+          ? "available"
+          : "not-generated",
+  }));
+}
+
+export async function updateModelVersionStatus(
+  tenant: string,
+  modelVersionId: string,
+  action: "publish" | "retire",
+): Promise<PublishModelVersionResponse | RetireModelVersionResponse> {
+  const response = await fetch(
+    `${nucleusUrl}/model-versions/${modelVersionId}/${action}`,
+    {
+      method: "POST",
+      credentials: "include",
+      headers: createTenantHeaders(tenant),
+    },
+  );
+
+  if (!response.ok) {
+    throw new Error(await getApiError(response, "Model update failed"));
+  }
+
+  return response.json();
+}
+
+async function getApiError(response: Response, fallback: string): Promise<string> {
+  try {
+    const body = (await response.json()) as {
+      error?: { message?: string };
+    };
+    return body.error?.message ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
 
 export function formatDate(value: string | null): string {
   if (!value) return "Not yet";
-  return new Intl.DateTimeFormat("en", { day: "2-digit", month: "short", year: "numeric" }).format(new Date(value));
+  return new Intl.DateTimeFormat("en", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+  }).format(new Date(value));
 }

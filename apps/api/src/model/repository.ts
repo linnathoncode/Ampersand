@@ -10,7 +10,10 @@ import { drizzle } from "drizzle-orm/node-postgres";
 import { pgSchema } from "drizzle-orm/pg-core";
 import type { PoolClient } from "pg";
 
-import { createModelVersionsForSchema } from "../drizzle/schema";
+import {
+  createDatasetDefinitionsForSchema,
+  createModelVersionsForSchema,
+} from "../drizzle/schema";
 
 export async function listModelVersions(
   client: PoolClient,
@@ -18,6 +21,7 @@ export async function listModelVersions(
 ): Promise<ModelVersionSummary[]> {
   const tenantSchema = pgSchema(schemaName);
   const modelVersions = createModelVersionsForSchema(tenantSchema);
+  const datasetDefinitions = createDatasetDefinitionsForSchema(tenantSchema);
   const database = drizzle(client);
 
   const rows = await database
@@ -33,9 +37,20 @@ export async function listModelVersions(
       retiredAt: modelVersions.retiredAt,
       retiredBy: modelVersions.retiredBy,
       createdAt: modelVersions.createdAt,
+      datasetName: datasetDefinitions.name,
+      targetColumn: datasetDefinitions.targetColumn,
     })
     .from(modelVersions)
-    .where(eq(modelVersions.isActive, true))
+    .innerJoin(
+      datasetDefinitions,
+      eq(modelVersions.datasetDefinitionId, datasetDefinitions.id),
+    )
+    .where(
+      and(
+        eq(modelVersions.isActive, true),
+        eq(datasetDefinitions.isActive, true),
+      ),
+    )
     .orderBy(desc(modelVersions.createdAt));
 
   return rows.map((row) => ({

@@ -1,26 +1,30 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
 
 import {
   createTenantHeaders,
-  getSelectedTenant,
   normalizeTenant,
   nucleusUrl,
   saveSelectedTenant,
-} from "../auth/client";
+} from "../../auth/client";
 
-export default function LoginPage() {
-  const router = useRouter();
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
+export default function AcceptInvitationPage() {
+  const [token, setToken] = useState("");
   const [tenant, setTenant] = useState("");
+  const [password, setPassword] = useState("");
+  const [confirmation, setConfirmation] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
-    setTenant(getSelectedTenant() ?? "");
+    const params = new URLSearchParams(window.location.search);
+    setToken(params.get("token") ?? "");
+    setTenant(
+      params.get("tenant") ??
+        process.env.NEXT_PUBLIC_DEV_TENANT_SUBDOMAIN ??
+        "ampersand-dev",
+    );
   }, []);
 
   return (
@@ -35,31 +39,38 @@ export default function LoginPage() {
           onSubmit={async (event) => {
             event.preventDefault();
             setError(null);
+
+            if (!token || !tenant) {
+              setError("This invitation link is incomplete");
+              return;
+            }
+
+            if (password !== confirmation) {
+              setError("Passwords do not match");
+              return;
+            }
+
+            const selectedTenant = normalizeTenant(tenant);
             setIsSubmitting(true);
 
             try {
-              const selectedTenant = normalizeTenant(tenant);
-              const response = await fetch(`${nucleusUrl}/auth/login`, {
+              const response = await fetch(`${nucleusUrl}/auth/password-set`, {
                 method: "POST",
-                credentials: "include",
                 headers: {
                   "content-type": "application/json",
                   ...createTenantHeaders(selectedTenant),
                 },
-                body: JSON.stringify({ email, password }),
+                body: JSON.stringify({ token, newPassword: password }),
               });
-              const body = (await response.json()) as {
-                message?: string;
-                success?: boolean;
-              };
+              const body = (await response.json()) as { message?: string; success?: boolean };
 
               if (!response.ok || body.success === false) {
-                setError(body.message ?? "Login failed");
+                setError(body.message ?? "The invitation is invalid or expired");
                 return;
               }
 
               saveSelectedTenant(selectedTenant);
-              router.push("/chat");
+              window.location.assign("/login");
             } catch {
               setError("The Nucleus service could not be reached");
             } finally {
@@ -68,44 +79,33 @@ export default function LoginPage() {
           }}
         >
           <div className="login-heading">
-            <h1>Sign in</h1>
-            <p>Use the workspace named in your invitation.</p>
+            <h1>Accept invitation</h1>
+            <p>Set the password for your workspace account.</p>
           </div>
-          <label>
-            Workspace
-            <input
-              autoComplete="organization"
-              onChange={(event) => setTenant(event.target.value)}
-              pattern="[a-z0-9-]+"
-              placeholder="acme-energy"
-              required
-              type="text"
-              value={tenant}
-            />
-          </label>
-          <label>
-            Email
-            <input
-              autoComplete="email"
-              onChange={(event) => setEmail(event.target.value)}
-              required
-              type="email"
-              value={email}
-            />
-          </label>
           <label>
             Password
             <input
-              autoComplete="current-password"
+              autoComplete="new-password"
+              minLength={8}
               onChange={(event) => setPassword(event.target.value)}
               required
               type="password"
               value={password}
             />
           </label>
+          <label>
+            Confirm password
+            <input
+              autoComplete="new-password"
+              onChange={(event) => setConfirmation(event.target.value)}
+              required
+              type="password"
+              value={confirmation}
+            />
+          </label>
           {error && <p className="login-error">{error}</p>}
           <button disabled={isSubmitting} type="submit">
-            {isSubmitting ? "Signing in" : "Sign in"}
+            {isSubmitting ? "Saving" : "Set password"}
           </button>
         </form>
       </section>

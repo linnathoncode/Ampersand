@@ -5,24 +5,31 @@ import { DefaultChatTransport, type UIMessage } from "ai";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { AppShell } from "../components/app-shell";
+import {
+  authenticatedUserChangedEvent,
+  createTenantHeaders,
+  getAuthenticatedUserId,
+  getSelectedTenant,
+  nucleusUrl,
+} from "../auth/client";
 
-const nucleusUrl = process.env.NEXT_PUBLIC_NUCLEUS_URL ?? "http://localhost:4000";
-const conversationCacheKey = "ampersand:chat:ampersand-dev";
-const timestampCacheKey = "ampersand:chat-timestamps:ampersand-dev";
 const composerMaxHeight = 144;
 
 export default function ChatPage() {
+  const [tenant, setTenant] = useState("");
+  const [userId, setUserId] = useState("");
+  const conversationCacheKey = `ampersand:chat:${tenant}:${userId}`;
+  const timestampCacheKey = `ampersand:chat-timestamps:${tenant}:${userId}`;
   const transport = useMemo(
     () =>
       new DefaultChatTransport({
         api: `${nucleusUrl}/chat`,
         credentials: "include",
         headers: {
-          "x-service-id": "ampersand-web",
-          "x-tenant-id": "ampersand-dev",
+          ...createTenantHeaders(tenant),
         },
       }),
-    [],
+    [tenant],
   );
   const { error, messages, sendMessage, setMessages, status, stop } = useChat({ transport });
   const [input, setInput] = useState("");
@@ -34,14 +41,42 @@ export default function ChatPage() {
   const activeToolName = findActiveToolName(messages);
 
   useEffect(() => {
+    setTenant(getSelectedTenant() ?? "");
+
+    const updateAuthenticatedUser = (event?: Event) => {
+      const changedUserId =
+        event instanceof CustomEvent && typeof event.detail === "string"
+          ? event.detail
+          : getAuthenticatedUserId();
+
+      setHasRestoredConversation(false);
+      setUserId(changedUserId ?? "");
+    };
+
+    updateAuthenticatedUser();
+    window.addEventListener(
+      authenticatedUserChangedEvent,
+      updateAuthenticatedUser,
+    );
+
+    return () =>
+      window.removeEventListener(
+        authenticatedUserChangedEvent,
+        updateAuthenticatedUser,
+      );
+  }, []);
+
+  useEffect(() => {
+    if (!tenant || !userId) return;
+
     const cachedMessages = readCachedMessages(
       window.sessionStorage.getItem(conversationCacheKey),
     );
 
-    if (cachedMessages) setMessages(cachedMessages);
-    setMessageTimestamps(readCachedTimestamps());
+    setMessages(cachedMessages ?? []);
+    setMessageTimestamps(readCachedTimestamps(timestampCacheKey));
     setHasRestoredConversation(true);
-  }, [setMessages]);
+  }, [conversationCacheKey, setMessages, tenant, timestampCacheKey, userId]);
 
   useEffect(() => {
     if (!hasRestoredConversation) return;
@@ -64,7 +99,7 @@ export default function ChatPage() {
       window.sessionStorage.setItem(timestampCacheKey, JSON.stringify(next));
       return next;
     });
-  }, [hasRestoredConversation, messages]);
+  }, [conversationCacheKey, hasRestoredConversation, messages, timestampCacheKey]);
 
   useEffect(() => {
     const animationFrame = window.requestAnimationFrame(() => {
@@ -271,12 +306,11 @@ function readCachedMessages(value: string | null): UIMessage[] | null {
 
     return Array.isArray(messages) ? (messages as UIMessage[]) : null;
   } catch {
-    window.sessionStorage.removeItem(conversationCacheKey);
     return null;
   }
 }
 
-function readCachedTimestamps(): Record<string, string> {
+function readCachedTimestamps(timestampCacheKey: string): Record<string, string> {
   const value = window.sessionStorage.getItem(timestampCacheKey);
 
   if (!value) return {};

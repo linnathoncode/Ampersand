@@ -5,8 +5,12 @@ type NucleusMeResponse = {
   success?: boolean;
   data?: {
     user?: { id?: string; isGod?: boolean };
-    claims?: Array<{ action?: string; path?: string }>;
   };
+};
+
+type StoredClaim = {
+  action: string;
+  path: string;
 };
 
 export async function resolveNucleusAuth(
@@ -34,7 +38,8 @@ export async function resolveNucleusAuth(
 
   const tenant = await databasePool.query<{ schema_name: string }>(
     `SELECT schema_name FROM main.tenants
-     WHERE subdomain = $1 OR id::text = $1 OR schema_name = $1
+     WHERE (subdomain = $1 OR id::text = $1 OR schema_name = $1)
+       AND status = 'active'
      LIMIT 1`,
     [tenantId],
   );
@@ -44,9 +49,7 @@ export async function resolveNucleusAuth(
 
   const claims = user.isGod
     ? ["*"]
-    : (auth.data?.claims ?? [])
-        .filter((claim) => claim.action && claim.path)
-        .map((claim) => `${claim.action}.${claim.path}`);
+    : await resolveUserClaims(schemaName, user.id);
 
   return {
     userId: user.id,
@@ -54,4 +57,31 @@ export async function resolveNucleusAuth(
     claims,
     authType: "nucleus-session",
   };
+}
+
+async function resolveUserClaims(
+  schemaName: string,
+  userId: string,
+): Promise<string[]> {
+  if (!/^[a-z_][a-z0-9_]*$/.test(schemaName)) {
+    throw new Error(`Unsafe PostgreSQL schema identifier: ${schemaName}`);
+  }
+
+  const result = await databasePool.query<StoredClaim>(
+    `SELECT DISTINCT claims.action, claims.path
+     FROM ${schemaName}.user_roles
+     INNER JOIN ${schemaName}.roles
+       ON roles.id = user_roles.role_id
+     INNER JOIN ${schemaName}.role_claims
+       ON role_claims.role_id = roles.id
+     INNER JOIN ${schemaName}.claims
+       ON claims.id = role_claims.claim_id
+     WHERE user_roles.user_id = $1
+       AND roles.is_active = true
+       AND role_claims.is_active = true
+       AND claims.is_active = true`,
+    [userId],
+  );
+
+  return result.rows.map((claim) => `${claim.action}.${claim.path}`);
 }

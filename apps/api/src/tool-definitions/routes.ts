@@ -6,6 +6,7 @@ import {
   getAuthContext,
   hasClaim,
 } from "../auth/context";
+import { resolveNucleusAuth } from "../auth/resolve-nucleus-auth";
 import { withTenantTransaction } from "../database/tenant-transaction";
 import {
   generateAndStoreModelToolDefinition,
@@ -23,7 +24,8 @@ export const toolDefinitionRoutes = new Elysia()
   .post(
     "/model-versions/:modelVersionId/tool-definition",
     async ({ params, request, set }) => {
-      const auth = getAuthContext(request.headers);
+      const auth =
+        getAuthContext(request.headers) ?? (await resolveNucleusAuth(request));
 
       if (!auth) {
         set.status = 401;
@@ -67,7 +69,8 @@ export const toolDefinitionRoutes = new Elysia()
     },
   )
   .get("/tools", async ({ request, set }) => {
-    const auth = getAuthContext(request.headers);
+    const auth =
+      getAuthContext(request.headers) ?? (await resolveNucleusAuth(request));
 
     if (!auth) {
       set.status = 401;

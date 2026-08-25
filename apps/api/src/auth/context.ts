@@ -4,6 +4,7 @@ export const GENERATE_TOOL_DEFINITION_CLAIM = "generate.tool_definitions";
 export const INVOKE_TOOL_CLAIM = "invoke.tool_definitions";
 export const CREATE_TRAINING_JOB_CLAIM = "create.training_jobs";
 export const RETIRE_MODEL_CLAIM = "retire.model_versions";
+export const INVITE_USER_CLAIM = "invite.users";
 
 export type AuthContext = {
   userId: string;

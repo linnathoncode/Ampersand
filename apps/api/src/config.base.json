@@ -8,6 +8,15 @@
   "redis": {
     "url": "REDIS_URL"
   },
+  "email": {
+    "provider": "azure",
+    "azure": {
+      "enabled": true,
+      "connection_string": "AZURE_EMAIL_CONNECTION_STRING",
+      "sender_address": "AZURE_EMAIL_SENDER",
+      "from_name": "Ampersand"
+    }
+  },
   "rateLimit": {
     "enabled": true,
     "strategy": "sliding-window",
@@ -56,6 +65,16 @@
     "register": {
       "enabled": false
     },
+    "invite": {
+      "enabled": true,
+      "isPublic": false,
+      "tokenExpiresIn": "7d",
+      "redirectUrl": "INVITE_REDIRECT_URL"
+    },
+    "passwordSet": {
+      "enabled": true,
+      "isPublic": true
+    },
     "logout": {
       "enabled": true
     },
@@ -71,12 +90,20 @@
     "seed": {
       "roles": [
         {
+          "name": "basic",
+          "description": "Can invoke published prediction tools"
+        },
+        {
           "name": "model-publisher",
           "description": "Can publish candidate model versions"
         },
         {
           "name": "dataset-creator",
           "description": "Can create dataset definitions"
+        },
+        {
+          "name": "tenant-admin",
+          "description": "Can invite users to the tenant"
         }
       ],
       "claims": [
@@ -109,27 +136,39 @@
           "path": "tool_definitions",
           "method": "POST",
           "description": "Invoke published prediction tools"
+        },
+        {
+          "action": "invite",
+          "path": "users",
+          "method": "POST",
+          "description": "Invite users to the tenant"
         }
       ],
       "roleClaimAssignments": [
         {
           "role": "model-publisher",
           "claims": [
-            "publish.model_versions",
-            "retire.model_versions",
-            "generate.tool_definitions"
+            "publish",
+            "retire",
+            "generate"
           ]
         },
         {
           "role": "dataset-creator",
           "claims": [
-            "create.dataset_definitions"
+            "create"
+          ]
+        },
+        {
+          "role": "tenant-admin",
+          "claims": [
+            "invite"
           ]
         },
         {
           "role": "basic",
           "claims": [
-            "invoke.tool_definitions"
+            "invoke"
           ]
         }
       ]

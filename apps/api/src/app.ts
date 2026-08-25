@@ -8,6 +8,7 @@ import { modelRoutes } from "./model/routes";
 import { predictionRoutes } from "./prediction/routes";
 import { toolDefinitionRoutes } from "./tool-definitions/routes";
 import { trainingRoutes } from "./training/routes";
+import { tenantUserRoutes } from "./tenant-users/routes";
 
 export async function createApp() {
   const nucleus = await NucleusElysiaPlugin({
@@ -30,5 +31,6 @@ export async function createApp() {
     .use(datasetRoutes)
     .use(toolDefinitionRoutes)
     .use(predictionRoutes)
-    .use(trainingRoutes);
+    .use(trainingRoutes)
+    .use(tenantUserRoutes);
 }

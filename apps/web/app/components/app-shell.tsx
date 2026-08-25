@@ -3,9 +3,17 @@
 import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 
+import {
+  clearAuthenticatedSession,
+  createTenantHeaders,
+  getSelectedTenant,
+  nucleusUrl,
+  synchronizeAuthenticatedUser,
+} from "../auth/client";
+
 type AppShellProps = {
   activeTab: "selection" | "controls";
-  activeSection?: "chat" | "models" | "tools";
+  activeSection?: "chat" | "models" | "team" | "tools";
   breadcrumb: string;
   children: ReactNode;
   controlsHref?: string;
@@ -21,6 +29,63 @@ export function AppShell({ activeTab, activeSection = "models", breadcrumb, chil
   const [lastTool, setLastTool] = useState<{ href: string; name: string } | undefined>(
     toolHref && toolName ? { href: toolHref, name: toolName } : undefined,
   );
+  const [accountEmail, setAccountEmail] = useState("");
+  const [canInviteUsers, setCanInviteUsers] = useState(false);
+  const [tenant, setTenant] = useState("");
+  const [isAccountMenuOpen, setIsAccountMenuOpen] = useState(false);
+
+  async function signOut(): Promise<void> {
+    try {
+      if (tenant) {
+        await fetch(`${nucleusUrl}/auth/logout`, {
+          method: "POST",
+          credentials: "include",
+          headers: createTenantHeaders(tenant),
+        });
+      }
+    } finally {
+      clearAuthenticatedSession();
+      window.location.assign("/login");
+    }
+  }
+
+  useEffect(() => {
+    const selectedTenant = getSelectedTenant();
+
+    if (!selectedTenant) {
+      window.location.assign("/login");
+      return;
+    }
+
+    setTenant(selectedTenant);
+
+    void fetch(`${nucleusUrl}/auth/me`, {
+      credentials: "include",
+      headers: createTenantHeaders(selectedTenant),
+    }).then(async (response) => {
+      if (!response.ok) {
+        window.location.assign("/login");
+        return;
+      }
+
+      const body = (await response.json()) as {
+        data?: {
+          user?: { id?: string; email?: string; isGod?: boolean };
+          claims?: Array<{ action?: string; path?: string }>;
+        };
+      };
+      if (body.data?.user?.id) {
+        synchronizeAuthenticatedUser(body.data.user.id);
+      }
+      setAccountEmail(body.data?.user?.email ?? "Account");
+      setCanInviteUsers(
+        body.data?.user?.isGod === true ||
+          body.data?.claims?.some(
+            (claim) => claim.action === "invite" && claim.path === "users",
+          ) === true,
+      );
+    }).catch(() => window.location.assign("/login"));
+  }, []);
 
   useEffect(() => {
     if (controlsHref) {
@@ -68,16 +133,36 @@ export function AppShell({ activeTab, activeSection = "models", breadcrumb, chil
           <a className={activeSection === "models" ? "active" : ""} href="/">Model controls</a>
           <a href="#">Datasets</a>
           <a className={activeSection === "tools" ? "active" : ""} href="/tools">Prediction tools</a>
+          {canInviteUsers && (
+            <a className={activeSection === "team" ? "active" : ""} href="/team">Team</a>
+          )}
         </nav>
-        <div className="sidebar-foot">Development tenant</div>
+        <div className="sidebar-foot">{tenant || "Workspace"}</div>
       </aside>
       <main className="content">
         <header className="topbar">
           <div className="breadcrumb">{breadcrumb}</div>
-          <button className="account" type="button" aria-label="Open account menu">
-            <span>FG</span>
-            Furkan
-          </button>
+          <div className="account-menu">
+            <button
+              aria-expanded={isAccountMenuOpen}
+              aria-haspopup="menu"
+              aria-label="Open account menu"
+              className="account"
+              onClick={() => setIsAccountMenuOpen((open) => !open)}
+              type="button"
+            >
+              <span>{accountEmail.slice(0, 2).toUpperCase() || "A"}</span>
+              {accountEmail || "Account"}
+            </button>
+            {isAccountMenuOpen && (
+              <div className="account-dropdown" role="menu">
+                <div className="account-dropdown-email">{accountEmail || "Account"}</div>
+                <button onClick={() => void signOut()} role="menuitem" type="button">
+                  Sign out
+                </button>
+              </div>
+            )}
+          </div>
         </header>
         {activeSection === "models" && (
           <nav className="section-tabs" aria-label="Model navigation">

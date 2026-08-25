@@ -1,11 +1,20 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import type { ModelVersionStatus } from "@ampersand/contracts";
 
+import { getSelectedTenant } from "../../auth/client";
 import { AppShell } from "../../components/app-shell";
-import { formatDate, modelDefinitions, sampleModelVersions } from "../../model-data";
+import {
+  fetchModelRegistry,
+  formatDate,
+  getModelDefinitions,
+  modelName,
+  modelSlug,
+  updateModelVersionStatus,
+  type RegistryModelVersion,
+} from "../../model-data";
 
 type RegistryFilter = "all" | ModelVersionStatus;
 type PendingAction = {
@@ -18,35 +27,94 @@ const filters: RegistryFilter[] = ["all", "candidate", "published", "retired"];
 
 export default function ModelControlsPage() {
   const { modelId } = useParams<{ modelId: string }>();
-  const definition = modelDefinitions.find((model) => model.slug === modelId) ?? modelDefinitions[0];
-  const [models, setModels] = useState(sampleModelVersions);
+  const [models, setModels] = useState<RegistryModelVersion[]>([]);
   const [filter, setFilter] = useState<RegistryFilter>("all");
   const [notice, setNotice] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const [pendingAction, setPendingAction] = useState<PendingAction | null>(null);
-  const visibleModels = useMemo(() => models.filter((model) => filter === "all" || model.status === filter), [filter, models]);
+  const [isUpdating, setIsUpdating] = useState(false);
 
-  function updateStatus(id: string, status: "published" | "retired") {
-    const now = new Date().toISOString();
-    setModels((current) => current.map((model) => model.id === id ? {
-      ...model,
-      status,
-      toolAvailability: status === "published" ? "available" : "unavailable",
-      publishedAt: status === "published" ? now : model.publishedAt,
-      retiredAt: status === "retired" ? now : model.retiredAt,
-    } : model));
-    setNotice(status === "published" ? "Model published and prediction tool made available." : "Model retired and prediction tool made unavailable.");
-    setPendingAction(null);
+  useEffect(() => {
+    const tenant = getSelectedTenant();
+    if (!tenant) return;
+
+    void fetchModelRegistry(tenant)
+      .then(setModels)
+      .catch((reason: unknown) => {
+        setError(reason instanceof Error ? reason.message : "Could not load models");
+      });
+  }, []);
+
+  const definition = useMemo(
+    () => getModelDefinitions(models).find((model) => model.slug === modelId),
+    [modelId, models],
+  );
+  const modelNameForPage = definition?.name ?? "Model controls";
+  const visibleModels = useMemo(
+    () =>
+      models.filter(
+        (model) =>
+          modelSlug(modelName(model)) === modelId &&
+          (filter === "all" || model.status === filter),
+      ),
+    [filter, modelId, models],
+  );
+
+  async function confirmStatusChange(): Promise<void> {
+    if (!pendingAction) return;
+    const tenant = getSelectedTenant();
+    if (!tenant) {
+      setError("Select a workspace before changing model status.");
+      return;
+    }
+
+    setIsUpdating(true);
+    setError(null);
+
+    try {
+      await updateModelVersionStatus(
+        tenant,
+        pendingAction.id,
+        pendingAction.action,
+      );
+      const refreshed = await fetchModelRegistry(tenant);
+      setModels(refreshed);
+      setNotice(
+        pendingAction.action === "publish"
+          ? "Model version published."
+          : "Model version retired.",
+      );
+      setPendingAction(null);
+    } catch (reason: unknown) {
+      setError(reason instanceof Error ? reason.message : "Model update failed");
+    } finally {
+      setIsUpdating(false);
+    }
   }
 
   return (
-    <AppShell activeTab="controls" breadcrumb={`Models / ${definition.name}`} controlsHref={`/models/${definition.slug}`}>
+    <AppShell
+      activeTab="controls"
+      breadcrumb={`Models / ${modelNameForPage}`}
+      controlsHref={`/models/${modelId}`}
+    >
       <section className="registry selection-registry" aria-labelledby="model-title">
         <div className="registry-toolbar">
-          <h2 id="model-title">{definition.name}</h2>
+          <h2 id="model-title">{modelNameForPage}</h2>
           <div className="filters" aria-label="Filter model versions">
-            {filters.map((item) => <button className={filter === item ? "selected" : ""} key={item} onClick={() => setFilter(item)} type="button">{item}</button>)}
+            {filters.map((item) => (
+              <button
+                className={filter === item ? "selected" : ""}
+                key={item}
+                onClick={() => setFilter(item)}
+                type="button"
+              >
+                {item}
+              </button>
+            ))}
           </div>
         </div>
+        {error && <p className="inline-error" role="alert">{error}</p>}
         <div className="table-wrap">
           <table className="version-table">
             <thead><tr><th>Version</th><th>Status</th><th>Model ID</th><th>Prediction tool</th><th>Created</th><th>Published</th><th><span className="sr-only">Actions</span></th></tr></thead>
@@ -66,6 +134,12 @@ export default function ModelControlsPage() {
                   </td>
                 </tr>
               ))}
+              {!error && models.length > 0 && visibleModels.length === 0 && (
+                <tr><td colSpan={7}>No versions match this filter.</td></tr>
+              )}
+              {!error && models.length === 0 && (
+                <tr><td colSpan={7}>Loading model versions...</td></tr>
+              )}
             </tbody>
           </table>
         </div>
@@ -76,13 +150,13 @@ export default function ModelControlsPage() {
             <h2 id="confirmation-title">{pendingAction.action === "publish" ? "Publish" : "Retire"} v{pendingAction.versionNumber}?</h2>
             <p>
               {pendingAction.action === "publish"
-                ? "This publishes the model and creates its prediction tool."
-                : "This removes the prediction tool from discovery and blocks new calls."}
+                ? "This updates the model version in the tenant registry."
+                : "This removes the model version from published discovery."}
             </p>
             <div className="dialog-actions">
-              <button className="dialog-cancel" onClick={() => setPendingAction(null)} type="button">Cancel</button>
-              <button className="dialog-confirm" onClick={() => updateStatus(pendingAction.id, pendingAction.action === "publish" ? "published" : "retired")} type="button">
-                {pendingAction.action === "publish" ? "Publish" : "Retire"}
+              <button className="dialog-cancel" disabled={isUpdating} onClick={() => setPendingAction(null)} type="button">Cancel</button>
+              <button className="dialog-confirm" disabled={isUpdating} onClick={() => void confirmStatusChange()} type="button">
+                {isUpdating ? "Saving..." : pendingAction.action === "publish" ? "Publish" : "Retire"}
               </button>
             </div>
           </div>

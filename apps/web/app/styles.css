@@ -136,6 +136,11 @@ button { color: inherit; }
 .breadcrumb { color: var(--muted); font-size: 12px; letter-spacing: 0.03em; }
 .account { display: flex; align-items: center; gap: 9px; padding: 0; border: 0; background: none; cursor: pointer; }
 .account span { display: grid; width: 29px; height: 29px; place-items: center; border: 1px solid #aab0aa; border-radius: 50%; font-size: 10px; }
+.account-menu { position: relative; }
+.account-dropdown { position: absolute; z-index: 5; top: calc(100% + 10px); right: 0; display: grid; min-width: 190px; gap: 8px; padding: 12px; border: 1px solid var(--line); background: var(--surface); box-shadow: 0 12px 28px rgba(24, 35, 30, 0.12); }
+.account-dropdown-email { overflow: hidden; color: var(--muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.account-dropdown button { padding: 8px 0; color: var(--ink); border: 0; border-top: 1px solid var(--line); background: none; text-align: left; cursor: pointer; font: inherit; }
+.account-dropdown button:hover, .account-dropdown button:focus-visible { color: var(--action); }
 
 .registry { border: 1px solid var(--rule); }
 .selection-registry { margin-top: 20px; }
@@ -275,11 +280,11 @@ code { color: #505650; font-family: "Cascadia Mono", Consolas, monospace; font-s
 .composer-send svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .composer button:disabled { color: #929992; border-color: #d1d5d0; background: #e4e7e2; cursor: not-allowed; }
 .composer button.composer-stop { color: var(--ink); border-color: #aeb4ae; background: transparent; }
-.login-page { display: grid; min-height: 100vh; grid-template-columns: minmax(280px, 0.8fr) minmax(420px, 1.2fr); }
-.login-brand { position: relative; display: grid; place-content: center; justify-items: center; overflow: hidden; color: #eef1eb; background: #19231e; }
-.login-brand span { font-family: Baskerville, "Palatino Linotype", serif; font-size: 150px; font-style: italic; line-height: 0.8; }
-.login-brand strong { margin-top: 24px; font-family: Baskerville, "Palatino Linotype", serif; font-size: 24px; font-weight: 400; }
-.login-panel { display: grid; place-items: center; padding: 40px; }
+.login-page { min-height: 100vh; color: var(--ink); background: var(--surface); }
+.login-brand { display: flex; height: 76px; align-items: center; gap: 14px; padding: 0 48px; color: #eef1eb; background: #19231e; }
+.login-brand span { font-family: Baskerville, "Palatino Linotype", serif; font-size: 46px; font-style: italic; line-height: 0.8; }
+.login-brand strong { font-family: Baskerville, "Palatino Linotype", serif; font-size: 21px; font-weight: 400; }
+.login-panel { display: grid; min-height: calc(100vh - 76px); place-items: center; padding: 52px 40px; }
 .login-form { display: grid; width: min(380px, 100%); gap: 22px; }
 .login-heading { margin-bottom: 16px; }
 .login-heading h1 { margin: 0; font-family: Baskerville, "Palatino Linotype", serif; font-size: 34px; font-weight: 400; }
@@ -290,6 +295,19 @@ code { color: #505650; font-family: "Cascadia Mono", Consolas, monospace; font-s
 .login-form button { height: 44px; color: white; border: 1px solid var(--action); border-radius: 2px; background: var(--action); cursor: pointer; }
 .login-form button:disabled { opacity: 0.65; cursor: wait; }
 .login-error { margin: -6px 0 0; color: #9a4141; }
+
+.team-page { width: min(720px, 100%); padding: 52px 48px; }
+.team-heading { padding-bottom: 24px; border-bottom: 1px solid var(--line); }
+.team-heading h1 { margin: 0; font-family: Baskerville, "Palatino Linotype", serif; font-size: 30px; font-weight: 400; }
+.team-heading p { margin: 8px 0 0; color: var(--muted); }
+.team-heading .invite-warning { color: #8c671c; font-size: 12px; }
+.invite-form { display: grid; grid-template-columns: minmax(240px, 1fr) auto; gap: 14px; align-items: end; padding-top: 28px; }
+.invite-form label { display: grid; gap: 8px; color: var(--muted); font-size: 12px; }
+.invite-form input { height: 44px; padding: 0 12px; color: var(--ink); border: 1px solid #bfc5be; border-radius: 2px; background: var(--surface); font: inherit; }
+.invite-form input:focus { outline: 2px solid #77a68b; outline-offset: 2px; }
+.invite-form button { height: 44px; padding: 0 18px; color: white; border: 1px solid var(--action); border-radius: 2px; background: var(--action); cursor: pointer; }
+.invite-form button:disabled { opacity: 0.65; cursor: wait; }
+.invite-message { grid-column: 1 / -1; margin: 4px 0 0; color: var(--muted); font-size: 13px; }
 
 @media (max-width: 1100px) {
   .tool-table th:nth-child(4), .tool-table td:nth-child(4) { display: none; }
@@ -313,10 +331,12 @@ code { color: #505650; font-family: "Cascadia Mono", Consolas, monospace; font-s
 button:focus-visible, a:focus-visible { outline: 2px solid #77a68b; outline-offset: 3px; }
 
 @media (max-width: 800px) {
-  .login-page { grid-template-columns: 1fr; }
-  .login-brand { min-height: 210px; }
-  .login-brand span { font-size: 88px; }
-  .login-brand strong { margin-top: 12px; }
+  .login-brand { height: 64px; padding: 0 20px; }
+  .login-brand span { font-size: 38px; }
+  .login-brand strong { font-size: 19px; }
+  .login-panel { min-height: calc(100vh - 64px); padding: 36px 20px; }
+  .team-page { padding: 32px 20px; }
+  .invite-form { grid-template-columns: 1fr; }
   .app-shell { display: block; }
   .sidebar { position: static; width: 100%; height: auto; padding: 17px 20px; flex-direction: row; align-items: center; }
   .brand-mark { font-size: 36px; }

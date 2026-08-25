@@ -12,6 +12,7 @@ import {
   RETIRE_MODEL_CLAIM,
 } from "../auth/context";
 import { withTenantTransaction } from "../database/tenant-transaction";
+import { resolveNucleusAuth } from "../auth/resolve-nucleus-auth";
 import {
   publishCandidateModel,
   getModelRegistry,
@@ -20,7 +21,8 @@ import {
 
 export const modelRoutes = new Elysia({ prefix: "/model-versions" })
   .get("/", async ({ request, set }) => {
-    const auth = getAuthContext(request.headers);
+    const auth =
+      getAuthContext(request.headers) ?? (await resolveNucleusAuth(request));
 
     if (!auth) {
       set.status = 401;
@@ -40,7 +42,8 @@ export const modelRoutes = new Elysia({ prefix: "/model-versions" })
   .post(
     "/:modelVersionId/publish",
     async ({ params, request, set }) => {
-      const auth = getAuthContext(request.headers);
+      const auth =
+        getAuthContext(request.headers) ?? (await resolveNucleusAuth(request));
 
       if (!auth) {
         set.status = 401;
@@ -84,7 +87,8 @@ export const modelRoutes = new Elysia({ prefix: "/model-versions" })
   .post(
     "/:modelVersionId/retire",
     async ({ params, request, set }) => {
-      const auth = getAuthContext(request.headers);
+      const auth =
+        getAuthContext(request.headers) ?? (await resolveNucleusAuth(request));
 
       if (!auth) {
         set.status = 401;
