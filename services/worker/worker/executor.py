@@ -2,12 +2,14 @@
 
 The executor runs only after the lifecycle has claimed a job with
 ``FOR UPDATE SKIP LOCKED``. It loads trusted job, snapshot, and dataset
-metadata from the tenant schema, verifies the snapshot checksum, validates the
-Parquet data against the trusted definition, splits it into reproducible
+metadata from the tenant schema, verifies the snapshot checksum, validates
+the Parquet data against the trusted definition, splits it into reproducible
 train and test partitions, fits a real regression pipeline with a naive
-baseline, validates the result against the private contract, and reaches a
-terminal state. All lifecycle writes remain ownership-guarded; a job that was
-cancelled or moved by Nucleus in the meantime is never overwritten.
+baseline, validates the result against the private contract, and hands it to
+Nucleus over the internal endpoint so Nucleus can register the candidate
+model and finish the job. All lifecycle writes remain ownership-guarded; a
+job that was cancelled or moved by Nucleus in the meantime is never
+overwritten.
 """
 
 from __future__ import annotations
@@ -15,6 +17,7 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Callable
+from pathlib import Path
 
 from .config import WorkerConfig
 from .contracts import TrainingWorkerInput, build_worker_input
@@ -36,11 +39,14 @@ from .errors import (
     SnapshotColumnOrderInvalidError,
     SnapshotColumnTypeInvalidError,
     SnapshotTargetInvalidError,
+    TrainingResultSubmissionError,
     WorkerError,
 )
+from .onnx_conversion import ONNX_ARTIFACT_SUFFIX
 from .regression_trainer import RegressionTrainer, validate_regression_result
 from .snapshots import resolve_snapshot_path, verify_snapshot_file
 from .splitting import load_snapshot_table, split_dataset
+from .submission import build_result_submission, submit_training_result
 
 _WORKER_FEATURE_TYPES = ("number", "integer", "boolean", "category")
 _WORKER_TARGET_TYPES = ("number", "integer")
@@ -51,8 +57,6 @@ SPLIT_PROGRESS_PERCENT = 65
 SPLIT_PROGRESS_MESSAGE = "Dataset split and preprocessing completed"
 TRAINING_PROGRESS_PERCENT = 80
 TRAINING_PROGRESS_MESSAGE = "Fitting the regression model on the training split"
-SUCCESS_PROGRESS_PERCENT = 100
-SUCCESS_PROGRESS_MESSAGE = "Regression training completed; no model registered"
 FAILED_PROGRESS_MESSAGE = "Training job failed"
 
 _MAX_ERROR_MESSAGE_LENGTH = 500
@@ -226,10 +230,11 @@ class JobExecutor:
             )
             self._check_runtime()
 
-            output = self._trainer.train(
-                worker_input, dataset, split, on_progress=heartbeat
-            )
+            output = None
             try:
+                output = self._trainer.train(
+                    worker_input, dataset, split, on_progress=heartbeat
+                )
                 self._check_runtime()
                 validate_regression_result(
                     self._config.worker_id,
@@ -241,22 +246,43 @@ class JobExecutor:
                     TRAINING_PROGRESS_PERCENT,
                     TRAINING_PROGRESS_MESSAGE,
                 )
+                outcome = submit_training_result(
+                    self._config,
+                    job_id=job.id,
+                    schema_name=job.schema_name,
+                    payload=build_result_submission(
+                        self._config.worker_id,
+                        worker_input,
+                        output.success_payload,
+                    ),
+                )
+                if (
+                    outcome.status == "registered"
+                    and outcome.version_number is not None
+                ):
+                    self._logger.info(
+                        "Nucleus registered candidate model version %s for "
+                        "training job %s",
+                        outcome.version_number,
+                        job.id,
+                    )
             finally:
-                output.artifact_path.unlink(missing_ok=True)
-
-            self._database.transition_job(
-                worker_id=self._config.worker_id,
-                schema_name=job.schema_name,
-                job_id=job.id,
-                current_status="running",
-                next_status="succeeded",
-                progress_percent=SUCCESS_PROGRESS_PERCENT,
-                progress_message=SUCCESS_PROGRESS_MESSAGE,
-                error_code=None,
-                error_message=None,
-            )
+                if output is not None:
+                    output.artifact_path.unlink(missing_ok=True)
+                else:
+                    # The trainer crashed before it could report its
+                    # temporary path; sweep this job's partial artifacts so
+                    # a failed attempt never leaves payload bytes behind.
+                    for leftover in Path(
+                        self._config.artifact_storage_path
+                    ).glob(f"{job.id}.*{ONNX_ARTIFACT_SUFFIX}"):
+                        leftover.unlink(missing_ok=True)
         except (JobOwnershipError, JobStateConflictError):
             raise
+        except TrainingResultSubmissionError as exc:
+            self._mark_failed(
+                job, exc.server_error_code or exc.code, exc.message
+            )
         except WorkerError as exc:
             self._mark_failed(job, exc.code, exc.message)
         self._logger.info(

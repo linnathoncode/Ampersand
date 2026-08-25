@@ -76,6 +76,18 @@ async function makeSuccessBody() {
   };
 }
 
+const failureBody = {
+  workerId: "worker-a",
+  fingerprint: "a".repeat(64),
+  result: {
+    status: "failed",
+    error: {
+      code: "SNAPSHOT_CHECKSUM_MISMATCH",
+      message: "Snapshot artifact checksum does not match its trusted digest",
+    },
+  },
+};
+
 function fakeClient(script: Record<string, unknown>): PoolClient {
   return {
     query: async (sql: string) => {
@@ -139,20 +151,15 @@ function makeRoutes(
         overrides.submission?.runTransaction
           ? overrides.submission.runTransaction(schemaName, operation)
           : runWithoutDatabase(committedScript(), operation),
+      reconcile:
+        overrides.submission?.reconcile ??
+        (async () => null),
     },
     ...overrides,
   });
 }
 
 const url = `http://localhost/internal/training-jobs/${jobId}/result`;
-
-function minimalBody() {
-  return {
-    workerId: "worker-a",
-    fingerprint: "a".repeat(64),
-    result: { status: "succeeded" },
-  };
-}
 
 function request(body: unknown, headers: Record<string, string> = {}) {
   return new Request(url, {
@@ -190,14 +197,14 @@ describe("internal training result route", () => {
     const headers = bearerHeaders();
     delete (headers as { authorization?: string }).authorization;
 
-    const response = await routes.handle(post(minimalBody(), headers));
+    const response = await routes.handle(post(successFailureBody(), headers));
 
     expect(response.status).toBe(401);
   });
 
   test("rejects a wrong token", async () => {
     const response = await makeRoutes().handle(
-      post(minimalBody(), bearerHeaders({ authorization: "Bearer nope" })),
+      post(successFailureBody(), bearerHeaders({ authorization: "Bearer nope" })),
     );
 
     expect(response.status).toBe(401);
@@ -207,7 +214,7 @@ describe("internal training result route", () => {
     const unconfigured = createInternalRoutes({ internalToken: undefined });
 
     const response = await unconfigured.handle(
-      post(minimalBody(), bearerHeaders()),
+      post(successFailureBody(), bearerHeaders()),
     );
 
     expect(response.status).toBe(401);
@@ -216,7 +223,7 @@ describe("internal training result route", () => {
   test("rejects a malformed tenant schema header", async () => {
     const response = await makeRoutes().handle(
       post(
-        minimalBody(),
+        successFailureBody(),
         bearerHeaders({ "x-tenant-schema": "tenant_x; DROP SCHEMA x" }),
       ),
     );
@@ -228,7 +235,7 @@ describe("internal training result route", () => {
   test("rejects a malformed job id", async () => {
     const response = await makeRoutes().handle(
       post(
-        minimalBody(),
+        successFailureBody(),
         bearerHeaders(),
         "http://localhost/internal/training-jobs/not-a-uuid/result",
       ),
@@ -241,6 +248,7 @@ describe("internal training result route", () => {
     const invalid = {
       workerId: "worker-a",
       fingerprint: "not-hex",
+      result: failureBody.result,
     };
 
     const response = await makeRoutes().handle(post(invalid, bearerHeaders()));
@@ -265,6 +273,43 @@ describe("internal training result route", () => {
     });
   });
 
+  test("records a failure result", async () => {
+    const recordedScripts: string[] = [];
+
+    const routes = makeRoutes({
+      submission: {
+        runTransaction: async (_schemaName, operation) =>
+          operation({
+            query: async (sql: string) => {
+              recordedScripts.push(String(sql));
+
+              if (sql.includes("SELECT fingerprint, claimed_by")) {
+                return {
+                  rows: [
+                    {
+                      fingerprint: "a".repeat(64),
+                      claimed_by: "worker-a",
+                      status: "running",
+                    },
+                  ],
+                  rowCount: 1,
+                };
+              }
+
+              return { rows: [], rowCount: 1 };
+            },
+          } as unknown as PoolClient),
+        reconcile: async () => null,
+      },
+    });
+
+    const response = await routes.handle(post(failureBody, bearerHeaders()));
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ status: "failed-recorded" });
+    expect(recordedScripts.some((sql) => sql.includes("'failed'"))).toBe(true);
+  });
+
   test("surfaces ownership rejections as 409", async () => {
     const { storageRoot, body } = await makeSuccessBody();
 
@@ -286,6 +331,7 @@ describe("internal training result route", () => {
               },
             }),
           ),
+        reconcile: async () => null,
       },
     });
 
@@ -295,7 +341,7 @@ describe("internal training result route", () => {
     expect((await response.json()).error.code).toBe("JOB_OWNERSHIP");
   });
 
-  test("responds unavailable when the registration transaction fails unexpectedly", async () => {
+  test("responds idempotently after an ambiguous commit that landed", async () => {
     const { storageRoot, body } = await makeSuccessBody();
 
     const routes = makeRoutes({
@@ -304,6 +350,35 @@ describe("internal training result route", () => {
         runTransaction: async () => {
           throw new Error("connection terminated during commit");
         },
+        reconcile: async () => ({
+          modelVersionId: "model-version-existing",
+          versionNumber: 3,
+          storageUri: `models/${definitionId}/v3/${jobId}.onnx`,
+        }),
+      },
+    });
+
+    const response = await routes.handle(post(body, bearerHeaders()));
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      status: "registered",
+      modelVersionId: "model-version-existing",
+      versionNumber: 3,
+      storageUri: `models/${definitionId}/v3/${jobId}.onnx`,
+    });
+  });
+
+  test("responds unavailable after an ambiguous commit that did not land", async () => {
+    const { storageRoot, body } = await makeSuccessBody();
+
+    const routes = makeRoutes({
+      storageRoot,
+      submission: {
+        runTransaction: async () => {
+          throw new Error("connection terminated during commit");
+        },
+        reconcile: async () => null,
       },
     });
 
@@ -313,3 +388,8 @@ describe("internal training result route", () => {
     expect((await response.json()).error.code).toBe("REGISTRATION_UNAVAILABLE");
   });
 });
+
+function successFailureBody() {
+  return failureBody;
+}
+

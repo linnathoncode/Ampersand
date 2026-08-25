@@ -2,9 +2,12 @@ import type {
   TrainingWorkerSuccess,
   TrainingWorkerModelFeature,
 } from "@ampersand/contracts";
-import type { PoolClient } from "pg";
+import type { Pool, PoolClient } from "pg";
 
-import { withTenantTransaction } from "../database/tenant-transaction";
+import {
+  assertTenantSchemaName,
+  withTenantTransaction,
+} from "../database/tenant-transaction";
 import {
   buildModelArtifactPath,
   deleteArtifact,
@@ -124,6 +127,21 @@ const COMPLETE_JOB_WITH_MODEL_SQL = `
 const LOOKUP_JOB_SQL =
   "SELECT claimed_by, status FROM training_jobs WHERE id = $1";
 
+const MARK_JOB_FAILED_SQL = `
+    UPDATE training_jobs
+    SET status = 'failed',
+        progress_percent = GREATEST(progress_percent, 0),
+        progress_message = 'Training job failed',
+        error_code = $3,
+        error_message = $4,
+        heartbeat_at = now(),
+        finished_at = now(),
+        updated_at = now()
+    WHERE id = $1
+      AND claimed_by = $2
+      AND status = 'running'
+`;
+
 /**
  * Registers one candidate model inside an open tenant-scoped transaction
  * and moves its job to ``succeeded`` in the same transaction. The caller
@@ -215,6 +233,40 @@ export async function registerCandidateModel(
     versionNumber: insertedVersion.rows[0]!.version_number,
     storageUri: promoted.storageUri,
   };
+}
+
+/**
+ * Records a structured training failure for one claimed running job in an
+ * open tenant-scoped transaction. The claim re-check mirrors the success
+ * path so a stale or foreign worker result can never mutate the job.
+ */
+export async function markTrainingJobFailed(
+  client: PoolClient,
+  input: {
+    jobId: string;
+    jobFingerprint: string;
+    workerId: string;
+    errorCode: string;
+    errorMessage: string;
+  },
+): Promise<void> {
+  await reassertClaimedJob(
+    client,
+    input.jobId,
+    input.workerId,
+    input.jobFingerprint,
+  );
+
+  const updated = await client.query(MARK_JOB_FAILED_SQL, [
+    input.jobId,
+    input.workerId,
+    input.errorCode.slice(0, 100),
+    input.errorMessage.slice(0, 500),
+  ]);
+
+  if (updated.rowCount === 0) {
+    await raiseJobGuardConflict(client, input.jobId);
+  }
 }
 
 async function reassertClaimedJob(
@@ -409,6 +461,37 @@ async function joinFeatureMetadata(
   });
 }
 
+export function mapUniqueViolation(error: unknown): CandidateRegistrationError | null {
+  if (
+    typeof error !== "object" ||
+    error === null ||
+    (error as { code?: unknown }).code !== "23505"
+  ) {
+    return null;
+  }
+
+  const constraint =
+    ((error as { constraint?: unknown }).constraint as string | undefined) ??
+    ((error as { detail?: unknown }).detail as string | undefined) ??
+    "";
+
+  if (constraint.includes("dataset_version") || constraint.includes("training_job_id")) {
+    return new CandidateRegistrationError(
+      "MODEL_VERSION_CONFLICT",
+      "The candidate model version conflicts with an existing registration",
+    );
+  }
+
+  if (constraint.includes("content_sha256")) {
+    return new CandidateRegistrationError(
+      "MODEL_ARTIFACT_CONTENT_CONFLICT",
+      "A model artifact with the same content digest is already registered",
+    );
+  }
+
+  return null;
+}
+
 async function raiseJobGuardConflict(client: PoolClient, jobId: string): Promise<never> {
   const current = await client.query<{
     claimed_by: string | null;
@@ -437,8 +520,71 @@ async function raiseJobGuardConflict(client: PoolClient, jobId: string): Promise
   );
 }
 
+const RECONCILE_REGISTRATION_SQL =
+  "SELECT mv.id AS model_version_id, mv.version_number, ma.storage_uri " +
+  "FROM model_versions mv JOIN model_artifacts ma ON ma.model_version_id = mv.id " +
+  "WHERE mv.training_job_id = $1";
+
+/**
+ * Reconciles an ambiguous commit on a fresh connection. Returns the
+ * registered candidate when the commit landed and ``null`` only when the
+ * job definitively has no registered candidate. Transient reconciliation
+ * failures throw so the caller never mistakes an unknown outcome for a
+ * confirmed rollback and deletes promoted artifacts.
+ */
+export async function reconcileRegistration(
+  pool: Pool,
+  schemaName: string,
+  jobId: string,
+): Promise<RegisteredCandidate | null> {
+  assertTenantSchemaName(schemaName);
+
+  let client: PoolClient | undefined;
+
+  try {
+    client = await pool.connect();
+    client.on("error", () => {});
+
+    try {
+      await client.query("BEGIN");
+      await client.query(`SET LOCAL search_path TO "${schemaName}"`);
+      const existing = await client.query<{
+        model_version_id: string;
+        version_number: number;
+        storage_uri: string;
+      }>(RECONCILE_REGISTRATION_SQL, [jobId]);
+
+      await client.query("COMMIT");
+
+      const row = existing.rows[0];
+
+      if (!row) {
+        return null;
+      }
+
+      return {
+        modelVersionId: row.model_version_id,
+        versionNumber: row.version_number,
+        storageUri: row.storage_uri,
+      };
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw error;
+    }
+  } catch (error) {
+    console.error(
+      "Ambiguous-commit reconciliation could not read the registration",
+      error,
+    );
+    throw error instanceof Error ? error : new Error(String(error));
+  } finally {
+    client?.release();
+  }
+}
+
 export type ResultSubmissionOutcome =
   | { kind: "registered"; candidate: RegisteredCandidate }
+  | { kind: "failure-recorded" }
   | {
       kind: "rejected";
       httpStatus: 409 | 422;
@@ -452,46 +598,24 @@ export type SubmissionDependencies = {
     schemaName: string,
     operation: (client: PoolClient) => Promise<Result>,
   ) => Promise<Result>;
+  /**
+   * Resolves one ambiguous commit on a fresh connection. Returns the
+   * committed candidate, or null only when the job definitively has no
+   * candidate. Implementations must throw on transient failures so the
+   * caller can keep promoted artifacts instead of deleting an unknown
+   * outcome.
+   */
+  reconcile: (
+    pool: Pool,
+    schemaName: string,
+    jobId: string,
+  ) => Promise<RegisteredCandidate | null>;
 };
 
 export const defaultSubmissionDependencies: SubmissionDependencies = {
   runTransaction: withTenantTransaction,
+  reconcile: reconcileRegistration,
 };
-
-/**
- * Maps a unique violation on the registration constraints to a structured
- * conflict so two submissions racing for one job produce a 409 instead of
- * an opaque unavailable response. Anything else is left unmapped.
- */
-export function mapUniqueViolation(error: unknown): CandidateRegistrationError | null {
-  if (
-    typeof error !== "object" ||
-    error === null ||
-    (error as { code?: unknown }).code !== "23505"
-  ) {
-    return null;
-  }
-
-  const constraint =
-    ((error as { constraint?: unknown }).constraint as string | undefined) ??
-    "";
-
-  if (constraint.includes("dataset_version") || constraint.includes("training_job_id")) {
-    return new CandidateRegistrationError(
-      "MODEL_VERSION_CONFLICT",
-      "The candidate model version conflicts with an existing registration",
-    );
-  }
-
-  if (constraint.includes("content_sha256")) {
-    return new CandidateRegistrationError(
-      "MODEL_ARTIFACT_CONTENT_CONFLICT",
-      "A model artifact with the same content digest is already registered",
-    );
-  }
-
-  return null;
-}
 
 function rejection(
   error: CandidateRegistrationError,
@@ -518,10 +642,13 @@ async function deletePromotedArtifacts(paths: string[]): Promise<void> {
 
 /**
  * Handles one success-result submission end to end: runs the registration
- * transaction and enforces the cleanup contract, deleting every promoted
- * file whenever the transaction did not commit.
+ * transaction, enforces the cleanup contract, and reconciles an ambiguous
+ * commit on a fresh connection. When the reconciliation finds the commit
+ * landed, the registered candidate is returned as an idempotent success so
+ * a worker retry observes the same response as the original attempt.
  */
 export async function submitSuccessResult(
+  pool: Pool,
   input: RegisterCandidateInput,
   dependencies: SubmissionDependencies = defaultSubmissionDependencies,
 ): Promise<ResultSubmissionOutcome> {
@@ -552,10 +679,67 @@ export async function submitSuccessResult(
       error,
     );
 
+    let reconciled: RegisteredCandidate | null;
+    try {
+      reconciled = await dependencies.reconcile(
+        pool,
+        input.schemaName,
+        input.jobId,
+      );
+    } catch (reconcileError) {
+      console.error(
+        "Ambiguous-commit reconciliation failed; promoted artifacts are kept for inspection",
+        reconcileError,
+      );
+      return {
+        kind: "unavailable",
+        message: "The registration outcome could not be confirmed",
+      };
+    }
+
+    if (reconciled) {
+      return { kind: "registered", candidate: reconciled };
+    }
+
     await deletePromotedArtifacts(promotedPaths);
     return {
       kind: "unavailable",
       message: "The registration outcome could not be confirmed",
+    };
+  }
+}
+
+export type FailureSubmissionInput = {
+  schemaName: string;
+  jobId: string;
+  jobFingerprint: string;
+  workerId: string;
+  errorCode: string;
+  errorMessage: string;
+};
+
+/**
+ * Handles one failure-result submission: records the structured training
+ * failure with the payload's bounded code and message. Registration errors
+ * surface as rejections; anything unexpected is reported as unavailable so
+ * the worker can retry.
+ */
+export async function submitFailureResult(
+  input: FailureSubmissionInput,
+  dependencies: SubmissionDependencies = defaultSubmissionDependencies,
+): Promise<ResultSubmissionOutcome> {
+  try {
+    await dependencies.runTransaction(input.schemaName, (client) =>
+      markTrainingJobFailed(client, input),
+    );
+    return { kind: "failure-recorded" };
+  } catch (error) {
+    if (error instanceof CandidateRegistrationError) {
+      return rejection(error);
+    }
+    return {
+      kind: "unavailable",
+      message: "The failure could not be recorded",
     };
   }
 }

@@ -1,4 +1,4 @@
-"""Focused tests for claimed-job execution and heartbeats."""
+"""Focused tests for claimed-job execution, submission, and heartbeats."""
 
 from __future__ import annotations
 
@@ -14,11 +14,18 @@ from worker.database import (
     Database,
     DatasetColumn,
 )
-from worker.errors import JobOwnershipError
+from worker.errors import (
+    JobOwnershipError,
+    WorkerError,
+    JobStateConflictError,
+    TrainingResultSubmissionError,
+    WorkerContractValidationError,
+)
 from worker.executor import (
     SNAPSHOT_VERIFIED_PROGRESS_MESSAGE,
     JobExecutor,
 )
+from worker.submission import SubmissionOutcome
 
 from support import make_context, make_snapshot_file, sha256_of
 
@@ -31,6 +38,8 @@ def config(tmp_path, heartbeat_interval_seconds=10):
         heartbeat_interval_seconds=heartbeat_interval_seconds,
         artifact_storage_path=str(tmp_path),
         log_level="INFO",
+        nucleus_internal_url="http://nucleus-internal.test",
+        nucleus_result_token="internal-secret",
         max_snapshot_bytes=1024 * 1024,
         max_snapshot_rows=100_000,
     )
@@ -89,22 +98,128 @@ def valid_context(snapshot):
     )
 
 
-def test_valid_job_succeeds_and_cleans_temporary_artifact(tmp_path):
+def registered_outcome():
+    return SubmissionOutcome(
+        status="registered",
+        model_version_id="model-version-1",
+        version_number=1,
+        storage_uri="models/dd/v1/job.onnx",
+    )
+
+
+def install_submitter(monkeypatch, outcomes_and_errors):
+    submissions = []
+
+    def submit(config, *, job_id, schema_name, payload, **_kwargs):
+        submissions.append(
+            {
+                "config": config,
+                "job_id": job_id,
+                "schema_name": schema_name,
+                "payload": payload,
+            }
+        )
+        outcome_or_error = outcomes_and_errors.pop(0)
+        if isinstance(outcome_or_error, Exception):
+            raise outcome_or_error
+        return outcome_or_error
+
+    monkeypatch.setattr("worker.executor.submit_training_result", submit)
+    return submissions
+
+
+def test_valid_job_submits_result_and_cleans_temporary_artifact(
+    tmp_path, monkeypatch
+):
     snapshot = make_snapshot_file(tmp_path)
     database = StubDatabase(valid_context(snapshot))
+    submissions = install_submitter(monkeypatch, [registered_outcome()])
 
     JobExecutor(config(tmp_path), database).handle(claimed_job())
 
-    assert database.transitions[-1]["next_status"] == "succeeded"
+    assert len(submissions) == 1
+    assert submissions[0]["job_id"] == claimed_job().id
+    assert submissions[0]["schema_name"] == "tenant_ampersand_dev"
+    assert submissions[0]["payload"]["workerId"] == "worker-test"
+    assert (
+        submissions[0]["payload"]["fingerprint"] == "a" * 64
+    )
+    assert submissions[0]["payload"]["result"]["status"] == "succeeded"
+
+    assert database.transitions == []
     assert [item["progress_percent"] for item in database.progress] == [
         50,
         65,
         80,
     ]
     assert list(tmp_path.glob("*.onnx.tmp")) == []
+    assert not (tmp_path / "models").exists()
 
 
-def test_no_time_column_job_succeeds(tmp_path):
+def test_submission_failure_marks_job_failed_with_server_code(
+    tmp_path, monkeypatch
+):
+    snapshot = make_snapshot_file(tmp_path)
+    database = StubDatabase(valid_context(snapshot))
+    install_submitter(
+        monkeypatch,
+        [
+            TrainingResultSubmissionError(
+                "Nucleus rejected the training result submission",
+                server_error_code="MODEL_FEATURE_METADATA_INVALID",
+            )
+        ],
+    )
+
+    JobExecutor(config(tmp_path), database).handle(claimed_job())
+
+    assert database.transitions[-1]["next_status"] == "failed"
+    assert (
+        database.transitions[-1]["error_code"]
+        == "MODEL_FEATURE_METADATA_INVALID"
+    )
+    assert list(tmp_path.glob("*.onnx.tmp")) == []
+
+
+def test_transport_failure_marks_job_failed_with_generic_code(
+    tmp_path, monkeypatch
+):
+    snapshot = make_snapshot_file(tmp_path)
+    database = StubDatabase(valid_context(snapshot))
+    install_submitter(
+        monkeypatch,
+        [
+            TrainingResultSubmissionError(
+                "The training result could not be submitted to Nucleus"
+            )
+        ],
+    )
+
+    JobExecutor(config(tmp_path), database).handle(claimed_job())
+
+    assert database.transitions[-1]["next_status"] == "failed"
+    assert (
+        database.transitions[-1]["error_code"]
+        == "TRAINING_RESULT_SUBMISSION_FAILED"
+    )
+
+
+def test_submission_state_conflict_propagates_unmarked(tmp_path, monkeypatch):
+    snapshot = make_snapshot_file(tmp_path)
+    database = StubDatabase(valid_context(snapshot))
+    install_submitter(
+        monkeypatch,
+        [JobStateConflictError("the job is no longer running")],
+    )
+
+    with pytest.raises(JobStateConflictError):
+        JobExecutor(config(tmp_path), database).handle(claimed_job())
+
+    assert database.transitions == []
+    assert list(tmp_path.glob("*.onnx.tmp")) == []
+
+
+def test_no_time_column_job_succeeds(tmp_path, monkeypatch):
     snapshot = make_snapshot_file(
         tmp_path,
         columns=[
@@ -124,15 +239,39 @@ def test_no_time_column_job_succeeds(tmp_path):
         ),
     )
     database = StubDatabase(context)
+    install_submitter(monkeypatch, [registered_outcome()])
 
     JobExecutor(config(tmp_path), database).handle(claimed_job())
 
-    assert database.transitions[-1]["next_status"] == "succeeded"
+    assert database.transitions == []
     assert [item["progress_percent"] for item in database.progress] == [
         50,
         65,
         80,
     ]
+
+
+def test_validation_failure_unlinks_temp_and_does_not_submit(
+    tmp_path, monkeypatch
+):
+    snapshot = make_snapshot_file(tmp_path)
+    database = StubDatabase(valid_context(snapshot))
+    submissions = install_submitter(monkeypatch, [])
+
+    def reject_payload(worker_id, worker_input, success_payload):
+        raise WorkerContractValidationError(
+            "worker payload failed contract validation: rejected"
+        )
+
+    monkeypatch.setattr(
+        "worker.executor.validate_regression_result", reject_payload
+    )
+
+    JobExecutor(config(tmp_path), database).handle(claimed_job())
+
+    assert submissions == []
+    assert list(tmp_path.glob("*.onnx.tmp")) == []
+    assert not (tmp_path / "models").exists()
 
 
 def test_missing_timestamps_mark_job_failed(tmp_path):
@@ -231,3 +370,30 @@ def test_heartbeat_ownership_conflict_propagates(tmp_path):
         JobExecutor(
             config(tmp_path), database, clock=FixedClock(step=6)
         ).handle(claimed_job())
+
+
+def test_trainer_crash_after_temp_write_leaves_no_artifact(
+    tmp_path, monkeypatch
+):
+    snapshot = make_snapshot_file(tmp_path)
+    database = StubDatabase(valid_context(snapshot))
+
+    class CrashAfterWriteTrainer:
+        def __init__(self, storage):
+            self._storage = storage
+
+        def train(self, worker_input, dataset, split, on_progress=None):
+            (self._storage / f"{worker_input.jobId}.token.onnx.tmp").write_bytes(
+                b"partial model bytes"
+            )
+            raise WorkerError("trainer crashed after writing the artifact")
+
+    executor = JobExecutor(config(tmp_path), database)
+    executor._trainer = CrashAfterWriteTrainer(tmp_path)
+    executor.handle(claimed_job())
+
+    assert list(tmp_path.glob("*.onnx.tmp")) == []
+    assert database.transitions[-1]["next_status"] == "failed"
+    assert (
+        database.transitions[-1]["error_code"] == "WORKER_ERROR"
+    )

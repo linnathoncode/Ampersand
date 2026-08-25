@@ -165,6 +165,14 @@ Registers the externally stored ONNX file for a model version and the informatio
 | `producer_worker_id` | `varchar(255)` | No | Trusted worker that produced the file |
 | `produced_at` | `timestamptz` | No | Artifact production time |
 
+Snapshot Parquet files live directly under the storage root at the URI recorded in `storage_uri`. Trained model artifacts are written by Nucleus to an immutable, versioned path relative to the same root:
+
+```
+models/{datasetDefinitionId}/v{versionNumber}/{trainingJobId}.onnx
+```
+
+The private worker trains the model and submits only the contract-validated result metadata; it never writes under `models/` and never runs registration SQL. When Nucleus accepts a result over its internal endpoint, it assigns the version number inside the registration transaction: it locks the dataset definition row, takes the current maximum version plus one, promotes the worker's verified ONNX payload from its temporary name to the path above with a no-clobber hard link, re-verifies the promoted file against the payload checksum and size, and inserts the `model_versions`, `model_artifacts`, and `model_features` rows together with the `running -> succeeded` job transition in one atomic transaction. The training job id in the filename keeps a crash between promotion and commit from blocking the next version assignment. The worker must verify a snapshot checksum before training. The inference service must verify the model artifact, trusted producer, and linked published model version before loading it through this path.
+
 ### `model_features`
 
 Freezes the ordered, bounded input contract for a particular model version.

@@ -46,10 +46,13 @@ python -m worker
 ```
 
 The worker loads its configuration from `.env` and from the `WORKER_*`
-variables documented in `.env.example`. The worker validates configuration,
-connects directly to PostgreSQL, confirms connectivity, and then stays idle
-until it receives `SIGTERM` or `SIGINT`. It does not claim or execute jobs
-yet; it never starts an HTTP server.
+variables documented in `.env.example`, plus `NUCLEUS_INTERNAL_URL` and
+`NUCLEUS_INTERNAL_TOKEN` for submitting training results to Nucleus. The
+worker validates configuration,
+connects directly to PostgreSQL, confirms connectivity, and then claims
+queued training jobs, trains on the frozen snapshot, and submits each
+result to Nucleus over the internal endpoint. It never starts an HTTP
+server and keeps running until it receives `SIGTERM` or `SIGINT`.
 
 To run the worker test suite:
 

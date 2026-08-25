@@ -9,6 +9,8 @@ from worker.config import (
     DEFAULT_MAX_SNAPSHOT_BYTES,
     DEFAULT_MAX_SNAPSHOT_ROWS,
     DEFAULT_POLL_INTERVAL_SECONDS,
+    DEFAULT_SUBMISSION_MAX_ATTEMPTS,
+    DEFAULT_SUBMISSION_TIMEOUT_SECONDS,
     WorkerConfig,
 )
 from worker.errors import (
@@ -30,6 +32,8 @@ def base_env(**overrides):
         "WORKER_POLL_INTERVAL_SECONDS": "5",
         "WORKER_HEARTBEAT_INTERVAL_SECONDS": "10",
         "ARTIFACT_STORAGE_PATH": "/tmp/ampersand-artifacts",
+        "NUCLEUS_INTERNAL_URL": "http://nucleus-internal.test/",
+        "NUCLEUS_INTERNAL_TOKEN": "internal-secret",
         "WORKER_LOG_LEVEL": "INFO",
     }
     env.update(overrides)
@@ -45,6 +49,8 @@ class TestConfigLoading:
         assert config.heartbeat_interval_seconds == 10
         assert config.claim_timeout_seconds == DEFAULT_CLAIM_TIMEOUT_SECONDS
         assert config.artifact_storage_path == "/tmp/ampersand-artifacts"
+        assert config.nucleus_internal_url == "http://nucleus-internal.test"
+        assert config.nucleus_result_token == "internal-secret"
         assert config.log_level == "INFO"
 
     def test_snapshot_limits_loaded(self):
@@ -67,6 +73,8 @@ class TestConfigLoading:
                 WORKER_LOG_LEVEL=None,
                 WORKER_MAX_SNAPSHOT_BYTES=None,
                 WORKER_MAX_SNAPSHOT_ROWS=None,
+                WORKER_SUBMISSION_TIMEOUT_SECONDS=None,
+                WORKER_SUBMISSION_MAX_ATTEMPTS=None,
             )
         )
         assert config.poll_interval_seconds == DEFAULT_POLL_INTERVAL_SECONDS
@@ -81,6 +89,14 @@ class TestConfigLoading:
         assert config.log_level == "INFO"
         assert config.max_snapshot_bytes == DEFAULT_MAX_SNAPSHOT_BYTES
         assert config.max_snapshot_rows == DEFAULT_MAX_SNAPSHOT_ROWS
+        assert (
+            config.submission_timeout_seconds
+            == DEFAULT_SUBMISSION_TIMEOUT_SECONDS
+        )
+        assert (
+            config.submission_max_attempts
+            == DEFAULT_SUBMISSION_MAX_ATTEMPTS
+        )
 
     def test_custom_claim_timeout_accepted(self):
         config = WorkerConfig.from_env(
@@ -91,6 +107,48 @@ class TestConfigLoading:
     def test_generated_worker_id_when_unset(self):
         config = WorkerConfig.from_env(base_env(WORKER_ID=None))
         assert re.fullmatch(r"worker-[A-Za-z0-9_.-]+-\d+", config.worker_id)
+
+    def test_missing_internal_url_raises(self):
+        with pytest.raises(MissingEnvironmentVariableError) as excinfo:
+            WorkerConfig.from_env(base_env(NUCLEUS_INTERNAL_URL=None))
+        assert excinfo.value.variable == "NUCLEUS_INTERNAL_URL"
+
+    def test_missing_internal_token_raises(self):
+        with pytest.raises(MissingEnvironmentVariableError) as excinfo:
+            WorkerConfig.from_env(base_env(NUCLEUS_INTERNAL_TOKEN=None))
+        assert excinfo.value.variable == "NUCLEUS_INTERNAL_TOKEN"
+
+    def test_internal_token_never_appears_in_error_messages(self):
+        token = "super-secret-internal-token"
+
+        with pytest.raises(MissingEnvironmentVariableError) as excinfo:
+            WorkerConfig.from_env(
+                base_env(
+                    NUCLEUS_INTERNAL_URL=None,
+                    NUCLEUS_INTERNAL_TOKEN=token,
+                )
+            )
+        assert token not in str(excinfo.value)
+
+    def test_submission_settings_loaded(self):
+        config = WorkerConfig.from_env(
+            base_env(
+                WORKER_SUBMISSION_TIMEOUT_SECONDS="20",
+                WORKER_SUBMISSION_MAX_ATTEMPTS="5",
+                NUCLEUS_INTERNAL_URL="http://nucleus-internal.test//",
+            )
+        )
+        assert config.submission_timeout_seconds == 20
+        assert config.submission_max_attempts == 5
+        assert config.nucleus_internal_url == "http://nucleus-internal.test"
+
+    @pytest.mark.parametrize(
+        "raw", ["not-a-url", "localhost:4000", "ftp://evil.test", "//host"]
+    )
+    def test_internal_url_requires_http_scheme(self, raw):
+        with pytest.raises(InvalidEnvironmentValueError) as excinfo:
+            WorkerConfig.from_env(base_env(NUCLEUS_INTERNAL_URL=raw))
+        assert excinfo.value.variable == "NUCLEUS_INTERNAL_URL"
 
 
 class TestConfigErrors:

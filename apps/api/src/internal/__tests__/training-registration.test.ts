@@ -1,12 +1,22 @@
 process.env.DATABASE_URL ??= "postgresql://unused:unused@localhost:5432/unused";
 
+import { createHash } from "node:crypto";
+import { existsSync } from "node:fs";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
-import type { PoolClient, QueryResult } from "pg";
+import type { Pool, PoolClient, QueryResult } from "pg";
 
 import type { RegisterCandidateInput } from "../training-registration";
 
-const { CandidateRegistrationError, mapUniqueViolation, registerCandidateModel } =
-  await import("../training-registration");
+const {
+  CandidateRegistrationError,
+  mapUniqueViolation,
+  reconcileRegistration,
+  registerCandidateModel,
+  submitSuccessResult,
+} = await import("../training-registration");
 
 type RowMap = Record<string, { rows: unknown[]; rowCount: number | null }>;
 
@@ -382,5 +392,96 @@ describe("mapUniqueViolation", () => {
     expect(mapUniqueViolation(pgError("23505", "some_other_constraint"))).toBeNull();
     expect(mapUniqueViolation(pgError("23502", "not_null"))).toBeNull();
     expect(mapUniqueViolation(new Error("boom"))).toBeNull();
+  });
+});
+
+describe("reconcileRegistration", () => {
+  test("rejects unsafe schema names before touching the pool", async () => {
+    let connectAttempts = 0;
+    const pool = {
+      connect: async () => {
+        connectAttempts += 1;
+        throw new Error("pool must not be reached");
+      },
+    } as unknown as Pool;
+
+    await expect(
+      reconcileRegistration(pool, 'a"; DROP TABLE x; --', jobId),
+    ).rejects.toThrow(/Unsafe PosgreSQL schema identifier/);
+    expect(connectAttempts).toBe(0);
+  });
+});
+
+describe("submitSuccessResult ambiguous-commit cleanup", () => {
+  async function makePromotableInput() {
+    const storageRoot = await mkdtemp(join(tmpdir(), "ampersand-reg-"));
+    const payload = Buffer.from("ambiguous commit cleanup bytes");
+    const tempName = `${jobId}.cleanup.onnx.tmp`;
+    await writeFile(join(storageRoot, tempName), payload);
+
+    const input = successInput({
+      storageRoot,
+      promote: undefined,
+    });
+    input.result.artifact.storageUri = tempName;
+    input.result.artifact.contentSha256 = createHash("sha256")
+      .update(payload)
+      .digest("hex");
+    input.result.artifact.sizeBytes = payload.byteLength;
+    return { storageRoot, input };
+  }
+
+  test("keeps promoted artifacts when reconciliation fails", async () => {
+    const { storageRoot, input } = await makePromotableInput();
+    let promotedPath: string | undefined;
+
+    try {
+      const outcome = await submitSuccessResult({} as Pool, input, {
+        runTransaction: (_schemaName, operation) =>
+          operation(makeClient(baseScript())).then(() => {
+            throw new Error("connection terminated during commit");
+          }),
+        reconcile: async () => {
+          throw new Error("pool timeout");
+        },
+      });
+
+      expect(outcome.kind).toBe("unavailable");
+
+      promotedPath = join(
+        storageRoot,
+        `models/${definitionId}/v7/${jobId}.onnx`,
+      );
+      expect(existsSync(promotedPath)).toBe(true);
+    } finally {
+      await rm(storageRoot, { recursive: true, force: true });
+      if (promotedPath) {
+        await rm(promotedPath, { force: true }).catch(() => {});
+      }
+    }
+  });
+
+  test("deletes promoted artifacts when reconciliation finds nothing", async () => {
+    const { storageRoot, input } = await makePromotableInput();
+
+    try {
+      const outcome = await submitSuccessResult({} as Pool, input, {
+        runTransaction: (_schemaName, operation) =>
+          operation(makeClient(baseScript())).then(() => {
+            throw new Error("connection terminated during commit");
+          }),
+        reconcile: async () => null,
+      });
+
+      expect(outcome.kind).toBe("unavailable");
+
+      const promotedPath = join(
+        storageRoot,
+        `models/${definitionId}/v7/${jobId}.onnx`,
+      );
+      expect(existsSync(promotedPath)).toBe(false);
+    } finally {
+      await rm(storageRoot, { recursive: true, force: true });
+    }
   });
 });

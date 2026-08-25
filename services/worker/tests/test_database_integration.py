@@ -143,6 +143,8 @@ def make_worker_config(db_url: str, worker_id: str = "worker-a") -> WorkerConfig
         heartbeat_interval_seconds=10,
         artifact_storage_path="./artifacts",
         log_level="INFO",
+        nucleus_internal_url="http://localhost:4000",
+        nucleus_result_token="unused",
     )
 
 
