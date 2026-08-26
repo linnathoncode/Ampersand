@@ -23,6 +23,7 @@ from worker.errors import (
 )
 from worker.executor import (
     SNAPSHOT_VERIFIED_PROGRESS_MESSAGE,
+    TRAINING_PROGRESS_PERCENT,
     JobExecutor,
 )
 from worker.submission import SubmissionOutcome
@@ -397,3 +398,25 @@ def test_trainer_crash_after_temp_write_leaves_no_artifact(
     assert (
         database.transitions[-1]["error_code"] == "WORKER_ERROR"
     )
+
+
+def test_cancellation_between_split_and_train_aborts_without_submission(
+    tmp_path, monkeypatch
+):
+    snapshot = make_snapshot_file(tmp_path)
+
+    class CancelledDuringTrainingDatabase(StubDatabase):
+        def update_job_progress(self, **kwargs):
+            if kwargs["progress_percent"] == TRAINING_PROGRESS_PERCENT:
+                raise JobStateConflictError("training job was cancelled")
+            super().update_job_progress(**kwargs)
+
+    database = CancelledDuringTrainingDatabase(valid_context(snapshot))
+    submissions = install_submitter(monkeypatch, [])
+
+    with pytest.raises(JobStateConflictError):
+        JobExecutor(config(tmp_path), database).handle(claimed_job())
+
+    assert submissions == []
+    assert database.transitions == []
+    assert list(tmp_path.glob("*.onnx.tmp")) == []

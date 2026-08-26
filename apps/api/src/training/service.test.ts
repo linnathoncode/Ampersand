@@ -7,12 +7,14 @@ import type {
   LoadedDatasetDefinition,
 } from "../dataset/repository";
 import {
+  cancelTrainingJobRequest,
   createTrainingJob,
   validateDatasetTrainability,
   type TrainingJobRepository,
 } from "./service";
 
 const datasetDefinitionId = "11111111-1111-4111-8111-111111111111";
+const jobId = "55555555-5555-4555-8555-555555555555";
 const snapshotId = "22222222-2222-4222-8222-222222222222";
 const schemaName = "tenant_ampersand_dev";
 const userId = "33333333-3333-4333-8333-333333333333";
@@ -51,6 +53,11 @@ function createRepository(overrides: Partial<TrainingJobRepository> = {}): Train
     insertTrainingJob: async (input) => ({
       id: "44444444-4444-4444-8444-444444444444",
       queuedAt: new Date("2026-08-12T08:00:00.000Z"),
+    }),
+    cancelTrainingJob: async () => ({
+      ok: false,
+      reason: "not-found" as const,
+      currentStatus: null,
     }),
     ...overrides,
   };
@@ -301,5 +308,81 @@ describe("createTrainingJob", () => {
     if (!result.ok) throw new Error("expected successful creation");
     expect(storedFingerprint).toBe(result.body.fingerprint);
     expect(storedConfig).toEqual(result.body.trainingConfig);
+  });
+});
+
+describe("cancelTrainingJobRequest", () => {
+  test("reports a successful cancellation with the previous status", async () => {
+    const cancelled: string[] = [];
+    const repository = createRepository({
+      cancelTrainingJob: async (jobId) => {
+        cancelled.push(jobId);
+        return { ok: true, fromStatus: "queued" as const };
+      },
+    });
+
+    const result = await cancelTrainingJobRequest(repository, jobId);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected successful cancellation");
+
+    expect(result.status).toBe(200);
+    expect(result.body).toEqual({
+      status: "cancelled",
+      fromStatus: "queued",
+    });
+    expect(cancelled).toEqual([jobId]);
+  });
+
+  test("reports running cancellations through the same outcome", async () => {
+    const repository = createRepository({
+      cancelTrainingJob: async () => ({
+        ok: true,
+        fromStatus: "running" as const,
+      }),
+    });
+
+    const result = await cancelTrainingJobRequest(repository, jobId);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected successful cancellation");
+    expect(result.body.fromStatus).toBe("running");
+  });
+
+  test("maps an unknown job to a structured 404", async () => {
+    const repository = createRepository({
+      cancelTrainingJob: async () => ({
+        ok: false,
+        reason: "not-found" as const,
+        currentStatus: null,
+      }),
+    });
+
+    const result = await cancelTrainingJobRequest(repository, jobId);
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected rejection");
+
+    expect(result.status).toBe(404);
+    expect(result.body.error.code).toBe("TRAINING_JOB_NOT_FOUND");
+  });
+
+  test("maps terminal states to a 409 echoing the current status", async () => {
+    const repository = createRepository({
+      cancelTrainingJob: async () => ({
+        ok: false,
+        reason: "terminal" as const,
+        currentStatus: "succeeded",
+      }),
+    });
+
+    const result = await cancelTrainingJobRequest(repository, jobId);
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected rejection");
+
+    expect(result.status).toBe(409);
+    expect(result.body.error.code).toBe("JOB_TERMINAL_STATE");
+    expect(result.body.error.message).toContain("'succeeded'");
   });
 });

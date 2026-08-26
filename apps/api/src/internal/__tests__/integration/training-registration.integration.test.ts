@@ -5,6 +5,11 @@ import { join } from "node:path";
 import { afterAll, describe, expect, test } from "bun:test";
 import pg from "pg";
 
+const { withTenantTransaction } = await import("../../../database/tenant-transaction");
+const { cancelTrainingJobRequest, createTrainingJobRepository } = await import(
+  "../../../training/service"
+);
+
 process.env.DATABASE_URL ||= "postgresql://ampersand:ampersand@localhost:5432/ampersand";
 
 const { defaultSubmissionDependencies, submitSuccessResult } = await import(
@@ -877,6 +882,175 @@ describe("internal training registration database integration", () => {
     }
   });
 });
+
+describe("cancel versus registration races", () => {
+  const PARK_LOCK_KEY = 918273645;
+
+  async function holdAdvisoryLock(): Promise<pg.PoolClient> {
+    const holder = await adminPool.connect();
+    await holder.query(`SELECT pg_advisory_lock(${PARK_LOCK_KEY})`);
+    return holder;
+  }
+
+  async function waitForParkedRegistration(): Promise<boolean> {
+    for (let attempt = 0; attempt < 120; attempt += 1) {
+      const waiting = await adminPool.query(
+        `SELECT 1 FROM pg_locks `
+          + `WHERE locktype = 'advisory' AND NOT granted LIMIT 1`,
+        [],
+      );
+      if ((waiting.rowCount ?? 0) > 0) {
+        return true;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    return false;
+  }
+
+  test(
+    "a cancel landing mid-registration rolls the candidate back and keeps the job cancelled",
+    async () => {
+      const fixture = await makeFixture();
+      let holder: pg.PoolClient | undefined;
+
+      try {
+        const admin = await adminPool.connect();
+        let job: ClaimedJobFixture;
+
+        try {
+          await seedDataset(admin, fixture.schemaName);
+          job = await seedClaimedJob(admin, fixture.schemaName);
+          await admin.query("SET search_path TO public");
+          await installTrigger(
+            fixture.schemaName,
+            `park_for_cancel() RETURNS trigger AS $fn$ `
+              + `BEGIN PERFORM pg_advisory_xact_lock(${PARK_LOCK_KEY}); `
+              + `RETURN NULL; END $fn$ LANGUAGE plpgsql`,
+            `CREATE TRIGGER park_after_features AFTER INSERT ON model_features `
+              + `FOR EACH ROW EXECUTE FUNCTION park_for_cancel()`,
+          );
+        } finally {
+          admin.release();
+        }
+
+        holder = await holdAdvisoryLock();
+        const registration = submitSuccess(fixture, job);
+
+        expect(await waitForParkedRegistration()).toBe(true);
+
+        const cancelOutcome = await withTenantTransaction(
+          fixture.schemaName,
+          (client) =>
+            cancelTrainingJobRequest(
+              createTrainingJobRepository(client),
+              job.jobId,
+            ),
+        );
+
+        expect(cancelOutcome.ok).toBe(true);
+        if (cancelOutcome.ok) {
+          expect(cancelOutcome.body).toEqual({
+            status: "cancelled",
+            fromStatus: "running",
+          });
+        }
+
+        await holder.query(`SELECT pg_advisory_unlock(${PARK_LOCK_KEY})`);
+        await holder.release();
+        holder = undefined;
+
+        const outcome = await registration;
+
+        expect(outcome.kind).toBe("rejected");
+        if (outcome.kind === "rejected") {
+          expect(outcome.code).toBe("JOB_STATE_CONFLICT");
+        }
+
+        expect(await directoryEmptyOfOnnx(fixture.storageRoot)).toBe(true);
+
+        const counts = await adminPool.query(
+          `SELECT COUNT(*)::int AS count `
+            + `FROM "${fixture.schemaName}".model_versions`,
+          [],
+        );
+        expect(counts.rows[0]?.count).toBe(0);
+
+        const jobRow = await adminPool.query<{ status: string }>(
+          `SELECT status FROM "${fixture.schemaName}".training_jobs WHERE id = $1`,
+          [job.jobId],
+        );
+        expect(jobRow.rows[0]?.status).toBe("cancelled");
+      } finally {
+        if (holder) {
+          await holder
+            .query(`SELECT pg_advisory_unlock(${PARK_LOCK_KEY})`)
+            .catch(() => {});
+          holder.release();
+        }
+        await rm(fixture.storageRoot, { recursive: true, force: true });
+        await dropSchema(fixture.schemaName);
+      }
+    },
+  );
+
+  test(
+    "cancelling after a committed registration reports a terminal conflict",
+    async () => {
+      const fixture = await makeFixture();
+
+      try {
+        const admin = await adminPool.connect();
+        let job: ClaimedJobFixture;
+
+        try {
+          await seedDataset(admin, fixture.schemaName);
+          job = await seedClaimedJob(admin, fixture.schemaName);
+          await admin.query("SET search_path TO public");
+        } finally {
+          admin.release();
+        }
+
+        const outcome = await submitSuccess(fixture, job);
+        expect(outcome.kind).toBe("registered");
+
+        const cancelResult = await withTenantTransaction(
+          fixture.schemaName,
+          (client) =>
+            cancelTrainingJobRequest(
+              createTrainingJobRepository(client),
+              job.jobId,
+            ),
+        );
+
+        expect(cancelResult.ok).toBe(false);
+        if (!cancelResult.ok) {
+          expect(cancelResult.status).toBe(409);
+          expect(cancelResult.body.error.code).toBe("JOB_TERMINAL_STATE");
+          expect(cancelResult.body.error.message).toContain("'succeeded'");
+        }
+
+        const jobRow = await adminPool.query<{ status: string }>(
+          `SELECT status FROM "${fixture.schemaName}".training_jobs WHERE id = $1`,
+          [job.jobId],
+        );
+        expect(jobRow.rows[0]?.status).toBe("succeeded");
+
+        const counts = await adminPool.query(
+          `SELECT COUNT(*)::int AS count `
+            + `FROM "${fixture.schemaName}".model_versions`,
+          [],
+        );
+        expect(counts.rows[0]?.count).toBe(1);
+      } finally {
+        await rm(fixture.storageRoot, { recursive: true, force: true });
+        await dropSchema(fixture.schemaName);
+      }
+    },
+  );
+});
+
+
+
 
 async function directoryEmptyOfOnnx(storageRoot: string): Promise<boolean> {
   const { readdir } = await import("node:fs/promises");

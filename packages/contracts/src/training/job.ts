@@ -60,6 +60,8 @@ export const TrainingJobRequestErrorCodeDto = Type.Union([
   Type.Literal("SNAPSHOT_NOT_FOUND"),
   Type.Literal("TRAINING_QUOTA_EXCEEDED"),
   Type.Literal("DUPLICATE_TRAINING_REQUEST"),
+  Type.Literal("TRAINING_JOB_NOT_FOUND"),
+  Type.Literal("JOB_TERMINAL_STATE"),
 ]);
 
 export type TrainingJobRequestErrorCode = Static<

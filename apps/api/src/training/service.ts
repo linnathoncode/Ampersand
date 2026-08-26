@@ -2,6 +2,7 @@ import type {
   CreateTrainingJobInput,
   ResolvedTrainingConfig,
   TrainingJobRequestError,
+  TrainingJobRequestErrorCode,
   TrainingJobResponse,
 } from "@ampersand/contracts";
 import type { PoolClient } from "pg";
@@ -14,10 +15,12 @@ import {
   QUEUED_TRAINING_JOB_PROGRESS_MESSAGE,
 } from "./config";
 import {
+  cancelTrainingJob,
   countActiveTrainingJobs,
   insertTrainingJob,
   loadLatestValidSnapshot,
   lockTrainingSubmissionQuota,
+  type CancelTrainingJobOutcome,
   type InsertedTrainingJob,
   type InsertTrainingJobInput,
   type LoadedTrainingSnapshot,
@@ -40,6 +43,7 @@ export type TrainingJobRepository = {
   lockTrainingSubmissionQuota(schemaName: string): Promise<void>;
   countActiveTrainingJobs(): Promise<number>;
   insertTrainingJob(input: InsertTrainingJobInput): Promise<InsertedTrainingJob>;
+  cancelTrainingJob(jobId: string): Promise<CancelTrainingJobOutcome>;
 };
 
 export function createTrainingJobRepository(
@@ -56,6 +60,7 @@ export function createTrainingJobRepository(
       lockTrainingSubmissionQuota(client, schemaName),
     countActiveTrainingJobs: () => countActiveTrainingJobs(client),
     insertTrainingJob: (input) => insertTrainingJob(client, input),
+    cancelTrainingJob: (jobId) => cancelTrainingJob(client, jobId),
   };
 }
 
@@ -204,6 +209,68 @@ export async function createTrainingJob(
     }
     throw error;
   }
+}
+
+export type TrainingCancellationError = {
+  error: {
+    code: TrainingJobRequestErrorCode;
+    message: string;
+    issues: { path: string; message: string }[];
+  };
+};
+
+export type CancelTrainingJobServiceResult =
+  | {
+      ok: true;
+      status: 200;
+      body: { status: "cancelled"; fromStatus: "queued" | "running" };
+    }
+  | { ok: false; status: 404 | 409; body: TrainingCancellationError };
+
+/**
+ * Cancels one queued or running training job. Terminal states are
+ * immutable, so a job that already reached succeeded, failed, cancelled,
+ * or dead stays untouched and the outcome reports the current status.
+ */
+export async function cancelTrainingJobRequest(
+  repository: TrainingJobRepository,
+  jobId: string,
+): Promise<CancelTrainingJobServiceResult> {
+  const outcome = await repository.cancelTrainingJob(jobId);
+
+  if (outcome.ok) {
+    return {
+      ok: true,
+      status: 200,
+      body: { status: "cancelled", fromStatus: outcome.fromStatus },
+    };
+  }
+
+  if (outcome.reason === "not-found") {
+    return {
+      ok: false,
+      status: 404,
+      body: {
+        error: {
+          code: "TRAINING_JOB_NOT_FOUND",
+          message: `No cancellable training job with id '${jobId}' exists`,
+          issues: [],
+        },
+      },
+    };
+  }
+
+  return {
+    ok: false,
+    status: 409,
+    body: {
+      error: {
+        code: "JOB_TERMINAL_STATE",
+        message: `Training job '${jobId}' is already in terminal status '${outcome.currentStatus}'`,
+        issues: [],
+      },
+    },
+  };
 }
 
 function toTrainingJobResponse(

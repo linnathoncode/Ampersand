@@ -484,3 +484,53 @@ class TestTransitions:
         status, claimed_by, _ = job_status(admin, tenant_schema, job_id)
         assert status == "running"
         assert claimed_by == "worker-a"
+
+
+class TestCancellationGuarantees:
+    def test_cancelled_queued_job_is_never_claimed(
+        self, worker, admin, tenant_schema
+    ):
+        job_id, _ = insert_queued_job(admin, tenant_schema)
+        with admin.transaction():
+            with admin.cursor() as cursor:
+                cursor.execute(f'SET LOCAL search_path TO "{tenant_schema}"')
+                cursor.execute(
+                    "UPDATE training_jobs SET status = 'cancelled', "
+                    "finished_at = now() WHERE id = %s",
+                    (job_id,),
+                )
+
+        assert worker.claim_next_job("worker-a", tenant_schema) is None
+
+        status, _, _ = job_status(admin, tenant_schema, job_id)
+        assert status == "cancelled"
+
+    def test_stale_completion_after_cancel_is_rejected(
+        self, worker, admin, tenant_schema
+    ):
+        job_id, _ = insert_queued_job(admin, tenant_schema)
+        worker.claim_next_job("worker-a", tenant_schema)
+
+        with admin.transaction():
+            with admin.cursor() as cursor:
+                cursor.execute(f'SET LOCAL search_path TO "{tenant_schema}"')
+                cursor.execute(
+                    "UPDATE training_jobs SET status = 'cancelled', "
+                    "finished_at = now() WHERE id = %s",
+                    (job_id,),
+                )
+
+        with pytest.raises(JobStateConflictError):
+            worker.transition_job(
+                worker_id="worker-a",
+                schema_name=tenant_schema,
+                job_id=job_id,
+                current_status="running",
+                next_status="succeeded",
+                progress_percent=100,
+                progress_message="too late",
+            )
+
+        status, claimed_by, _ = job_status(admin, tenant_schema, job_id)
+        assert status == "cancelled"
+        assert claimed_by == "worker-a"
