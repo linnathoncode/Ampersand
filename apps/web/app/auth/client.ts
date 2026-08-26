@@ -54,6 +54,20 @@ export function clearAuthenticatedSession(): void {
   window.sessionStorage.removeItem(authenticatedUserStorageKey);
 }
 
+export async function fetchWithAuthRedirect(
+  input: RequestInfo | URL,
+  init?: RequestInit,
+): Promise<Response> {
+  const response = await fetch(input, init);
+
+  if (response.status === 401) {
+    clearAuthenticatedSession();
+    window.location.assign("/login");
+  }
+
+  return response;
+}
+
 function clearChatSessionCache(): void {
   for (let index = window.sessionStorage.length - 1; index >= 0; index -= 1) {
     const key = window.sessionStorage.key(index);

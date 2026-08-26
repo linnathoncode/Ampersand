@@ -11,10 +11,43 @@ import {
   getAuthContext,
   hasClaim,
 } from "../auth/context";
+import { resolveNucleusAuth } from "../auth/resolve-nucleus-auth";
 import { withTenantTransaction } from "../database/tenant-transaction";
+import { loadTrainingJobProgress } from "./repository";
 import { createTrainingJob, createTrainingJobRepository } from "./service";
 
-export const trainingRoutes = new Elysia({ prefix: "/training-jobs" }).post(
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+export const trainingRoutes = new Elysia({ prefix: "/training-jobs" }).get(
+  "/:trainingJobId",
+  async ({ params, request, set }) => {
+    const auth =
+      getAuthContext(request.headers) ?? (await resolveNucleusAuth(request));
+    if (!auth) {
+      set.status = 401;
+      return { error: { code: "UNAUTHENTICATED", message: "Authentication is required" } };
+    }
+    if (!hasClaim(auth, CREATE_TRAINING_JOB_CLAIM)) {
+      set.status = 403;
+      return { error: { code: "FORBIDDEN", message: "Training job access permission is required" } };
+    }
+    if (!UUID_PATTERN.test(params.trainingJobId)) {
+      set.status = 400;
+      return { error: { code: "INVALID_TRAINING_JOB_ID", message: "Training job id is invalid" } };
+    }
+
+    const job = await withTenantTransaction(auth.schemaName, (client) =>
+      loadTrainingJobProgress(client, params.trainingJobId),
+    );
+    if (!job) {
+      set.status = 404;
+      return { error: { code: "TRAINING_JOB_NOT_FOUND", message: "Training job was not found" } };
+    }
+
+    return job;
+  },
+).post(
   "/",
   async ({ request, set }) => {
     const auth = getAuthContext(request.headers);

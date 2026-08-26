@@ -7,7 +7,7 @@ import type { PoolClient } from "pg";
 
 import { inferColumnType, type SourceColumnInfo } from "./schema-inference";
 
-const MANAGED_TABLE_NAMES = new Set([
+export const MANAGED_TABLE_NAMES = new Set([
   "users",
   "profiles",
   "roles",

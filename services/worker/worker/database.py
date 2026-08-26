@@ -358,16 +358,16 @@ class Database:
                             )
                         )
                     return JobExecutionContext(
-                        job_id=first[0],
+                        job_id=str(first[0]),
                         job_fingerprint=first[1],
                         training_config=first[2],
                         max_runtime_seconds=first[3],
-                        snapshot_id=first[4],
+                        snapshot_id=str(first[4]),
                         snapshot_uri=first[5],
                         snapshot_format=first[6],
                         snapshot_content_sha256=first[7],
                         snapshot_row_count=first[8],
-                        dataset_definition_id=first[9],
+                        dataset_definition_id=str(first[9]),
                         source_schema=first[10],
                         source_table=first[11],
                         target_column=first[12],

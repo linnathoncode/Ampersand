@@ -7,13 +7,14 @@ import {
 import { Value } from "@sinclair/typebox/value";
 import { Elysia } from "elysia";
 
+import { resolveArtifactStoragePath } from "../artifacts/storage-path";
 import { CREATE_DATASET_CLAIM, getAuthContext, hasClaim } from "../auth/context";
 import { withTenantTransaction } from "../database/tenant-transaction";
 import { createDatasetDefinition } from "./service";
 import { createDatasetSnapshot } from "./snapshot-service";
 import { createSnapshotStorage } from "./storage";
 
-const snapshotStoragePath = process.env.ARTIFACT_STORAGE_PATH ?? "./artifacts";
+const snapshotStoragePath = resolveArtifactStoragePath();
 
 export const datasetRoutes = new Elysia({ prefix: "/dataset-definitions" })
   .post(

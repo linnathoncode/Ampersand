@@ -6,6 +6,7 @@ import type { ReactNode } from "react";
 import {
   clearAuthenticatedSession,
   createTenantHeaders,
+  fetchWithAuthRedirect,
   getSelectedTenant,
   nucleusUrl,
   synchronizeAuthenticatedUser,
@@ -13,7 +14,7 @@ import {
 
 type AppShellProps = {
   activeTab: "selection" | "controls";
-  activeSection?: "chat" | "models" | "team" | "tools";
+  activeSection?: "chat" | "datasets" | "models" | "team" | "tools";
   breadcrumb: string;
   children: ReactNode;
   controlsHref?: string;
@@ -59,7 +60,7 @@ export function AppShell({ activeTab, activeSection = "models", breadcrumb, chil
 
     setTenant(selectedTenant);
 
-    void fetch(`${nucleusUrl}/auth/me`, {
+    void fetchWithAuthRedirect(`${nucleusUrl}/auth/me`, {
       credentials: "include",
       headers: createTenantHeaders(selectedTenant),
     }).then(async (response) => {
@@ -131,7 +132,7 @@ export function AppShell({ activeTab, activeSection = "models", breadcrumb, chil
           <a href="#">Overview</a>
           <a className={activeSection === "chat" ? "active" : ""} href="/chat">Conversation</a>
           <a className={activeSection === "models" ? "active" : ""} href="/">Model controls</a>
-          <a href="#">Datasets</a>
+          <a className={activeSection === "datasets" ? "active" : ""} href="/datasets">Datasets</a>
           <a className={activeSection === "tools" ? "active" : ""} href="/tools">Prediction tools</a>
           {canInviteUsers && (
             <a className={activeSection === "team" ? "active" : ""} href="/team">Team</a>

@@ -21,6 +21,7 @@
     "test:integration": "TRAINING_MAX_ACTIVE_JOBS=100 bun --env-file=.env vitest run --config tests/integration/vitest.integration.config.mts"
   },
   "devDependencies": {
+    "@ai-sdk/react": "4.0.80",
     "@ampersand/contracts": "workspace:*",
     "@playwright/test": "1.62.1",
     "@sinclair/typebox": "0.34.52",

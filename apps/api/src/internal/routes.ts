@@ -7,6 +7,7 @@ import { Value } from "@sinclair/typebox/value";
 import { timingSafeEqual } from "node:crypto";
 import { Elysia } from "elysia";
 
+import { resolveArtifactStoragePath } from "../artifacts/storage-path";
 import {
   defaultSubmissionDependencies,
   submitSuccessResult,
@@ -45,7 +46,7 @@ export function createInternalRoutes(
   overrides: Partial<InternalRouteDependencies> = {},
 ) {
   const dependencies: InternalRouteDependencies = {
-    storageRoot: process.env.ARTIFACT_STORAGE_PATH ?? "./artifacts",
+    storageRoot: resolveArtifactStoragePath(),
     internalToken: process.env.NUCLEUS_INTERNAL_TOKEN,
     submission: defaultSubmissionDependencies,
     ...overrides,
