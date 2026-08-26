@@ -2,6 +2,7 @@ import { PredictionRequestDto } from "@ampersand/contracts";
 import { Elysia } from "elysia";
 import type { PoolClient } from "pg";
 
+import { resolveArtifactStoragePath } from "../artifacts/storage-path";
 import { getAuthContext, hasClaim, INVOKE_TOOL_CLAIM } from "../auth/context";
 import { createFilesystemArtifactReader } from "../artifact-verification/filesystem-reader";
 import { verifyStoredModelArtifact } from "../artifact-verification/service";
@@ -43,7 +44,7 @@ type PredictionRouteDependencies = {
 
 const trustedWorkerIds = parseTrustedWorkerIds(process.env.TRUSTED_WORKER_IDS);
 const readArtifact = createFilesystemArtifactReader(
-  process.env.ARTIFACT_STORAGE_PATH ?? "./artifacts",
+  resolveArtifactStoragePath(),
 );
 
 const defaultDependencies: PredictionRouteDependencies = {

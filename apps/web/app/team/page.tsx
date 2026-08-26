@@ -5,6 +5,7 @@ import { useState } from "react";
 import { AppShell } from "../components/app-shell";
 import {
   createTenantHeaders,
+  fetchWithAuthRedirect,
   getSelectedTenant,
   nucleusUrl,
 } from "../auth/client";
@@ -36,7 +37,7 @@ export default function TeamPage() {
             setIsSubmitting(true);
 
             try {
-              const response = await fetch(`${nucleusUrl}/tenant-users/invite`, {
+              const response = await fetchWithAuthRedirect(`${nucleusUrl}/tenant-users/invite`, {
                 method: "POST",
                 credentials: "include",
                 headers: {

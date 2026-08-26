@@ -10,6 +10,45 @@ export type LoadedTrainingSnapshot = {
   rowCount: number;
 };
 
+export type LoadedTrainingJobProgress = {
+  id: string;
+  status: "queued" | "running" | "succeeded" | "failed" | "cancelled" | "dead";
+  progressPercent: number;
+  progressMessage: string | null;
+  errorCode: string | null;
+  errorMessage: string | null;
+};
+
+export async function loadTrainingJobProgress(
+  pool: PoolClient,
+  jobId: string,
+): Promise<LoadedTrainingJobProgress | null> {
+  const result = await pool.query<{
+    id: string;
+    status: LoadedTrainingJobProgress["status"];
+    progress_percent: number;
+    progress_message: string | null;
+    error_code: string | null;
+    error_message: string | null;
+  }>(
+    `SELECT id, status, progress_percent, progress_message, error_code, error_message
+     FROM training_jobs
+     WHERE id = $1 AND is_active = true`,
+    [jobId],
+  );
+  const row = result.rows[0];
+  if (!row) return null;
+
+  return {
+    id: row.id,
+    status: row.status,
+    progressPercent: row.progress_percent,
+    progressMessage: row.progress_message,
+    errorCode: row.error_code,
+    errorMessage: row.error_message,
+  };
+}
+
 export async function loadLatestValidSnapshot(
   pool: PoolClient,
   definitionId: string,

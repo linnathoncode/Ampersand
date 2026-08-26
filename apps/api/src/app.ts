@@ -4,6 +4,7 @@ import { NucleusElysiaPlugin } from "nucleus-core-ts";
 
 import { chatRoutes } from "./chat/routes";
 import { datasetRoutes } from "./dataset/routes";
+import { sourceTableRoutes } from "./dataset/source-table-routes";
 import { internalRoutes } from "./internal/routes";
 import { modelRoutes } from "./model/routes";
 import { predictionRoutes } from "./prediction/routes";
@@ -30,6 +31,7 @@ export async function createApp() {
     .use(modelRoutes)
     .use(chatRoutes)
     .use(datasetRoutes)
+    .use(sourceTableRoutes)
     .use(toolDefinitionRoutes)
     .use(predictionRoutes)
     .use(trainingRoutes)

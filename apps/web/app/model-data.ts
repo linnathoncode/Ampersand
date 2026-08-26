@@ -6,7 +6,7 @@ import type {
   RetireModelVersionResponse,
 } from "@ampersand/contracts";
 
-import { createTenantHeaders, nucleusUrl } from "./auth/client";
+import { createTenantHeaders, fetchWithAuthRedirect, nucleusUrl } from "./auth/client";
 
 export type ModelDefinition = {
   slug: string;
@@ -69,12 +69,12 @@ export async function fetchModelRegistry(
 ): Promise<RegistryModelVersion[]> {
   const headers = createTenantHeaders(tenant);
   const [modelsResponse, toolsResponse] = await Promise.all([
-    fetch(`${nucleusUrl}/model-versions`, {
+    fetchWithAuthRedirect(`${nucleusUrl}/model-versions`, {
       credentials: "include",
       headers,
       cache: "no-store",
     }),
-    fetch(`${nucleusUrl}/tools`, {
+    fetchWithAuthRedirect(`${nucleusUrl}/tools`, {
       credentials: "include",
       headers,
       cache: "no-store",
@@ -109,7 +109,7 @@ export async function updateModelVersionStatus(
   modelVersionId: string,
   action: "publish" | "retire",
 ): Promise<PublishModelVersionResponse | RetireModelVersionResponse> {
-  const response = await fetch(
+  const response = await fetchWithAuthRedirect(
     `${nucleusUrl}/model-versions/${modelVersionId}/${action}`,
     {
       method: "POST",

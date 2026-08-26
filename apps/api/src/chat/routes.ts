@@ -10,14 +10,24 @@ import {
   toUIMessageStream,
   type ToolSet,
   type UIMessage,
+  type UIMessageChunk,
 } from "ai";
 import { Elysia } from "elysia";
 
-import { getAuthContext, hasClaim, INVOKE_TOOL_CLAIM } from "../auth/context";
+import {
+  CREATE_DATASET_CLAIM,
+  CREATE_TRAINING_JOB_CLAIM,
+  getAuthContext,
+  hasClaim,
+  INVOKE_TOOL_CLAIM,
+} from "../auth/context";
 import { resolveNucleusAuth } from "../auth/resolve-nucleus-auth";
 import { withTenantTransaction } from "../database/tenant-transaction";
+import { listSourceTables } from "../dataset/source-table-service";
 import { predictionRoutes } from "../prediction/routes";
 import { getDiscoverableTools } from "../tool-definitions/service";
+import { checkLlmAvailability } from "./llm-availability";
+import { startModelTraining } from "./training-flow";
 
 const ChatRequestDto = Type.Object(
   {
@@ -27,106 +37,329 @@ const ChatRequestDto = Type.Object(
   { additionalProperties: true },
 );
 
-const CHAT_INSTRUCTIONS = `You are the Ampersand assistant. Respond normally to greetings, general questions, and casual conversation.
-Prediction tools are optional capabilities. Do not mention a tool, request its inputs, or steer the conversation toward it unless the user explicitly asks for a prediction or clearly asks about something that a tool predicts.
-When a prediction is requested, use the matching tool only after the required inputs are available. Ask only for missing required inputs.
-After a tool call, report the prediction, uncertainty, model version, and warnings returned by the tool.
-If a tool rejects the inputs, explain the rejection without inventing a prediction.`;
+const CHAT_INSTRUCTIONS = `You are the Ampersand assistant. Available tools are supplied with each conversation.
+Call list_source_tables when the user asks about datasets, tables, uploaded data, or data available for training. Call it immediately instead of describing it or asking which dataset they mean.
+For training, gather a model name, source table, feature columns, and one numeric target. Never invent columns or infer correlation from column names. Show a short summary and ask for confirmation. Call start_model_training only after the user confirms.
+Confirmation is required exactly once. When start_model_training returns a queued outcome, tell the user that the job is queued and stop. Do not ask them to confirm, proceed, or start training again.
+Training and prediction are separate. Never send table names, column names, a target, or a feature list to a prediction tool. Prediction tools accept actual values for one observation and should only be called when the user asks for a prediction.
+Report actual tool results and explain rejections without inventing results. Respond normally when no tool is relevant.`;
 
-export const chatRoutes = new Elysia().post(
-  "/chat",
-  async ({ body, request, set }) => {
+export const chatRoutes = new Elysia()
+  .get("/chat/status", async ({ request, set }) => {
     const auth =
       getAuthContext(request.headers) ?? (await resolveNucleusAuth(request));
 
     if (!auth) {
       set.status = 401;
-      return { error: { code: "UNAUTHENTICATED", message: "Authentication is required" } };
-    }
-
-    if (!hasClaim(auth, INVOKE_TOOL_CLAIM)) {
-      set.status = 403;
       return {
         error: {
-          code: "FORBIDDEN",
-          message: "Prediction tool invocation permission is required",
+          code: "UNAUTHENTICATED",
+          message: "Authentication is required",
         },
       };
     }
 
-    const apiKey = process.env.LLM_API_KEY;
+    return checkLlmAvailability();
+  })
+  .post(
+    "/chat",
+    async ({ body, request, set }) => {
+      const auth =
+        getAuthContext(request.headers) ?? (await resolveNucleusAuth(request));
 
-    if (!apiKey) {
-      set.status = 503;
-      return {
-        error: {
-          code: "LLM_NOT_CONFIGURED",
-          message: "The conversation model is not configured",
+      if (!auth) {
+        set.status = 401;
+        return {
+          error: {
+            code: "UNAUTHENTICATED",
+            message: "Authentication is required",
+          },
+        };
+      }
+
+      if (!hasClaim(auth, INVOKE_TOOL_CLAIM)) {
+        set.status = 403;
+        return {
+          error: {
+            code: "FORBIDDEN",
+            message: "Prediction tool invocation permission is required",
+          },
+        };
+      }
+
+      const availability = await checkLlmAvailability();
+      if (!availability.available) {
+        set.status = 503;
+        return {
+          error: {
+            code: "LLM_UNAVAILABLE",
+            message: availability.message,
+          },
+        };
+      }
+
+      const apiKey = process.env.LLM_API_KEY!;
+
+      const messages = body.messages as UIMessage[];
+
+      const definitions = await withTenantTransaction(
+        auth.schemaName,
+        (client) => getDiscoverableTools(client, auth.schemaName),
+      );
+      const tools = createConversationTools(
+        definitions,
+        body.id,
+        auth,
+        latestUserConfirmedTraining(messages),
+        conversationHasQueuedTraining(messages),
+      );
+      const availableTools = Object.keys(tools).length > 0 ? tools : undefined;
+      const provider = createOpenAI({
+        apiKey,
+        baseURL: process.env.LLM_BASE_URL || undefined,
+      });
+      const result = streamText({
+        model: provider.chat(process.env.LLM_MODEL ?? "gpt-4.1-mini"),
+        instructions: CHAT_INSTRUCTIONS,
+        messages: await convertToModelMessages(messages),
+        tools: availableTools,
+        stopWhen: stepCountIs(5),
+        providerOptions: {
+          openai: {
+            reasoningEffort: "none",
+          },
         },
-      };
-    }
+      });
 
-    const definitions = await withTenantTransaction(auth.schemaName, (client) =>
-      getDiscoverableTools(client, auth.schemaName),
-    );
-    const tools = createConversationTools(
-      definitions,
-      body.id,
-      auth,
-    );
-    const provider = createOpenAI({
-      apiKey,
-      baseURL: process.env.LLM_BASE_URL || undefined,
-    });
-    const result = streamText({
-      model: provider.chat(process.env.LLM_MODEL ?? "gpt-4.1-mini"),
-      instructions: CHAT_INSTRUCTIONS,
-      messages: await convertToModelMessages(body.messages as UIMessage[]),
-      tools,
-      stopWhen: stepCountIs(5),
-    });
+      const stream = toUIMessageStream({ stream: result.stream }).pipeThrough(
+        preventEmptyAssistantResponse(),
+      );
 
-    return createUIMessageStreamResponse({
-      stream: toUIMessageStream({ stream: result.stream }),
-    });
-  },
-  { body: ChatRequestDto },
-);
+      return createUIMessageStreamResponse({ stream });
+    },
+    { body: ChatRequestDto },
+  );
 
-function createConversationTools(
+export function createConversationTools(
   definitions: Awaited<ReturnType<typeof getDiscoverableTools>>,
   conversationId: string | undefined,
   auth: NonNullable<Awaited<ReturnType<typeof resolveNucleusAuth>>>,
+  trainingConfirmed = false,
+  trainingAlreadyQueued = false,
 ): ToolSet {
-  return Object.fromEntries(
+  let trainingExecution: Promise<unknown> | undefined;
+  const predictionTools = Object.fromEntries(
     definitions.map((definition) => [
-      definition.toolName,
-      dynamicTool({
-        description: definition.description,
-        inputSchema: jsonSchema(definition.inputSchema),
-        execute: async (inputs) => {
-          const internalHeaders = new Headers();
-          internalHeaders.set("content-type", "application/json");
-          internalHeaders.set("x-user-id", auth.userId);
-          internalHeaders.set("x-tenant-schema", auth.schemaName);
-          internalHeaders.set("x-auth-type", auth.authType);
-          internalHeaders.set("x-user-claims", auth.claims.join(","));
+          definition.toolName,
+          dynamicTool({
+            description: definition.description,
+            inputSchema: jsonSchema(definition.inputSchema),
+            execute: async (inputs) => {
+              const internalHeaders = new Headers();
+              internalHeaders.set("content-type", "application/json");
+              internalHeaders.set("x-user-id", auth.userId);
+              internalHeaders.set("x-tenant-schema", auth.schemaName);
+              internalHeaders.set("x-auth-type", auth.authType);
+              internalHeaders.set("x-user-claims", auth.claims.join(","));
 
-          const response = await predictionRoutes.handle(
-            new Request("http://ampersand.internal/predictions", {
-              method: "POST",
-              headers: internalHeaders,
-              body: JSON.stringify({
-                toolName: definition.toolName,
-                conversationId,
-                inputs,
-              }),
-            }),
-          );
+              const response = await predictionRoutes.handle(
+                new Request("http://ampersand.internal/predictions", {
+                  method: "POST",
+                  headers: internalHeaders,
+                  body: JSON.stringify({
+                    toolName: definition.toolName,
+                    conversationId,
+                    inputs,
+                  }),
+                }),
+              );
 
-          return response.json();
-        },
-      }),
+              return response.json();
+            },
+          }),
     ]),
   );
+
+  const tools: ToolSet = {
+    ...predictionTools,
+    list_source_tables: dynamicTool({
+      description:
+        "List source tables available in the current tenant for model training, including row counts, columns, and detected data types.",
+      inputSchema: jsonSchema({
+        type: "object",
+        properties: {},
+        additionalProperties: false,
+      }),
+      execute: async () => ({
+        tables: await withTenantTransaction(auth.schemaName, (client) =>
+          listSourceTables(client, auth.schemaName),
+        ),
+      }),
+    }),
+  };
+
+  if (
+    !trainingAlreadyQueued &&
+    hasClaim(auth, CREATE_DATASET_CLAIM) &&
+    hasClaim(auth, CREATE_TRAINING_JOB_CLAIM)
+  ) {
+    tools.start_model_training = dynamicTool({
+      description:
+        "Create a dataset definition, freeze its current data, and queue a model-training job after the user explicitly confirms the displayed training summary.",
+      inputSchema: jsonSchema({
+        type: "object",
+        additionalProperties: false,
+        required: ["name", "sourceTable", "features", "target"],
+        properties: {
+          name: { type: "string", minLength: 1, maxLength: 200 },
+          sourceTable: { type: "string", pattern: "^[A-Za-z_][A-Za-z0-9_]*$" },
+          features: {
+            type: "array",
+            minItems: 1,
+            items: {
+              type: "string",
+              pattern: "^[A-Za-z_][A-Za-z0-9_]*$",
+            },
+          },
+          target: {
+            type: "string",
+            pattern: "^[A-Za-z_][A-Za-z0-9_]*$",
+          },
+          timeColumn: {
+            type: "string",
+            pattern: "^[A-Za-z_][A-Za-z0-9_]*$",
+          },
+        },
+      }),
+      execute: async (input) => {
+        if (!trainingConfirmed) {
+          return {
+            outcome: "rejected",
+            code: "CONFIRMATION_REQUIRED",
+            message: "Show the training summary and obtain explicit confirmation first.",
+          };
+        }
+
+        trainingExecution ??= startModelTraining(
+          auth,
+          toStartModelTrainingInput(input as TrainingToolInput),
+        );
+
+        return trainingExecution;
+      },
+    });
+  }
+
+  return tools;
+}
+
+type StartModelTrainingInput = Parameters<typeof startModelTraining>[1];
+
+type TrainingToolInput = {
+  name: string;
+  sourceTable: string;
+  features: string[];
+  target: string;
+  timeColumn?: string;
+};
+
+export function toStartModelTrainingInput(
+  input: TrainingToolInput,
+): StartModelTrainingInput {
+  return {
+    name: input.name,
+    sourceTable: input.sourceTable,
+    features: input.features.map((name) => ({
+      name,
+      description: `Training feature ${name}`,
+    })),
+    target: {
+      name: input.target,
+      description: `Prediction target ${input.target}`,
+    },
+    ...(input.timeColumn
+      ? {
+          timeColumn: {
+            name: input.timeColumn,
+            description: `Training time column ${input.timeColumn}`,
+          },
+        }
+      : {}),
+  };
+}
+
+export function latestUserConfirmedTraining(messages: UIMessage[]): boolean {
+  const latestUserMessage = [...messages]
+    .reverse()
+    .find((message) => message.role === "user");
+  if (!latestUserMessage) return false;
+
+  const text = latestUserMessage.parts
+    .filter(
+      (part): part is Extract<typeof part, { type: "text" }> =>
+        part.type === "text",
+    )
+    .map((part) => part.text)
+    .join(" ")
+    .trim()
+    .toLowerCase();
+
+  return /^(yes|confirm(ed)?|start( training)?|train it|proceed|go ahead|\/train)[.! ]*$/.test(
+    text,
+  );
+}
+
+export function conversationHasQueuedTraining(messages: UIMessage[]): boolean {
+  return messages.some((message) =>
+    message.parts.some(
+      (part) =>
+        part.type === "dynamic-tool" &&
+        part.toolName === "start_model_training" &&
+        part.state === "output-available" &&
+        isQueuedTrainingResult(part.output),
+    ),
+  );
+}
+
+function isQueuedTrainingResult(
+  value: unknown,
+): value is { outcome: "queued" } {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "outcome" in value &&
+    value.outcome === "queued"
+  );
+}
+
+function preventEmptyAssistantResponse(): TransformStream<
+  UIMessageChunk,
+  UIMessageChunk
+> {
+  let hasVisibleContent = false;
+
+  return new TransformStream({
+    transform(chunk, controller) {
+      if (
+        (chunk.type === "text-delta" && chunk.delta.trim().length > 0) ||
+        chunk.type === "tool-input-available" ||
+        chunk.type === "tool-input-error"
+      ) {
+        hasVisibleContent = true;
+      }
+
+      if (chunk.type === "finish" && !hasVisibleContent) {
+        const id = crypto.randomUUID();
+        controller.enqueue({ type: "text-start", id });
+        controller.enqueue({
+          type: "text-delta",
+          id,
+          delta: "I could not complete that response. Please try again.",
+        });
+        controller.enqueue({ type: "text-end", id });
+      }
+
+      controller.enqueue(chunk);
+    },
+  });
 }
