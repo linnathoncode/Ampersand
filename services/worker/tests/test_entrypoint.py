@@ -41,6 +41,8 @@ def make_config():
         heartbeat_interval_seconds=10,
         artifact_storage_path="./artifacts",
         log_level="INFO",
+        nucleus_internal_url="http://nucleus-internal.test",
+        nucleus_result_token="internal-secret",
     )
 
 

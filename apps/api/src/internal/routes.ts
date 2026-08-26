@@ -1,5 +1,7 @@
 import {
+  TrainingWorkerFailureDto,
   TrainingWorkerSuccessDto,
+  type TrainingWorkerFailure,
   type TrainingWorkerSuccess,
 } from "@ampersand/contracts";
 import { Type, type Static } from "@sinclair/typebox";
@@ -8,8 +10,10 @@ import { timingSafeEqual } from "node:crypto";
 import { Elysia } from "elysia";
 
 import { resolveArtifactStoragePath } from "../artifacts/storage-path";
+import { databasePool } from "../database/pool";
 import {
   defaultSubmissionDependencies,
+  submitFailureResult,
   submitSuccessResult,
   type ResultSubmissionOutcome,
   type SubmissionDependencies,
@@ -21,15 +25,15 @@ const UUID_PATTERN =
 
 /**
  * The submission envelope is local to this endpoint on purpose: it wraps the
- * shared TrainingWorkerSuccessDto payload with only the transport fields the
- * worker already knows (its id and the job fingerprint), so the shared
- * worker-result contract stays untouched.
+ * shared TrainingWorkerSuccessDto/TrainingWorkerFailureDto payloads with
+ * only the transport fields the worker already knows (its id and the job
+ * fingerprint), so the shared worker-result contract stays untouched.
  */
 const TrainingResultSubmissionDto = Type.Object(
   {
     workerId: Type.String({ minLength: 1 }),
     fingerprint: Type.String({ pattern: "^[a-f0-9]{64}$" }),
-    result: TrainingWorkerSuccessDto,
+    result: Type.Union([TrainingWorkerSuccessDto, TrainingWorkerFailureDto]),
   },
   { additionalProperties: false },
 );
@@ -68,6 +72,9 @@ export function createInternalRoutes(
         };
       }
 
+      // x-tenant-schema is stamped by Nucleus tenant middleware from
+      // x-tenant-id; this route validates the stamped value. See the
+      // nucleus-core-ts onRequest hook.
       const schemaName = request.headers.get("x-tenant-schema") ?? "";
 
       if (!TENANT_SCHEMA_PATTERN.test(schemaName)) {
@@ -104,17 +111,33 @@ export function createInternalRoutes(
         return body.body;
       }
 
-      const outcome = await submitSuccessResult(
-        {
-          schemaName,
-          jobId,
-          jobFingerprint: body.body.fingerprint,
-          workerId: body.body.workerId,
-          result: body.body.result,
-          storageRoot: dependencies.storageRoot,
-        },
-        dependencies.submission,
-      );
+      const outcome =
+        body.body.result.status === "succeeded"
+          ? await submitSuccessResult(
+              databasePool,
+              {
+                schemaName,
+                jobId,
+                jobFingerprint: body.body.fingerprint,
+                workerId: body.body.workerId,
+                result: body.body.result,
+                storageRoot: dependencies.storageRoot,
+              },
+              dependencies.submission,
+            )
+          : await submitFailureResult(
+              {
+                schemaName,
+                jobId,
+                jobFingerprint: body.body.fingerprint,
+                workerId: body.body.workerId,
+                errorCode: (body.body.result as TrainingWorkerFailure).error
+                  .code,
+                errorMessage: (body.body.result as TrainingWorkerFailure).error
+                  .message,
+              },
+              dependencies.submission,
+            );
 
       return respondWith(outcome, set);
     },
@@ -135,6 +158,10 @@ function respondWith(
         versionNumber: outcome.candidate.versionNumber,
         storageUri: outcome.candidate.storageUri,
       };
+    case "failure-recorded":
+      set.status = 200;
+
+      return { status: "failed-recorded" };
     case "rejected":
       set.status = outcome.httpStatus;
 

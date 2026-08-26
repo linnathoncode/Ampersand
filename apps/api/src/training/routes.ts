@@ -7,6 +7,7 @@ import { Value } from "@sinclair/typebox/value";
 import { Elysia } from "elysia";
 
 import {
+  CANCEL_TRAINING_JOB_CLAIM,
   CREATE_TRAINING_JOB_CLAIM,
   getAuthContext,
   hasClaim,
@@ -14,95 +15,184 @@ import {
 import { resolveNucleusAuth } from "../auth/resolve-nucleus-auth";
 import { withTenantTransaction } from "../database/tenant-transaction";
 import { loadTrainingJobProgress } from "./repository";
-import { createTrainingJob, createTrainingJobRepository } from "./service";
+import {
+  cancelTrainingJobRequest,
+  createTrainingJob,
+  createTrainingJobRepository,
+} from "./service";
 
-const UUID_PATTERN =
+const TRAINING_JOB_ID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-export const trainingRoutes = new Elysia({ prefix: "/training-jobs" }).get(
-  "/:trainingJobId",
-  async ({ params, request, set }) => {
-    const auth =
-      getAuthContext(request.headers) ?? (await resolveNucleusAuth(request));
-    if (!auth) {
-      set.status = 401;
-      return { error: { code: "UNAUTHENTICATED", message: "Authentication is required" } };
-    }
-    if (!hasClaim(auth, CREATE_TRAINING_JOB_CLAIM)) {
-      set.status = 403;
-      return { error: { code: "FORBIDDEN", message: "Training job access permission is required" } };
-    }
-    if (!UUID_PATTERN.test(params.trainingJobId)) {
-      set.status = 400;
-      return { error: { code: "INVALID_TRAINING_JOB_ID", message: "Training job id is invalid" } };
-    }
+function requestError(
+  code: string,
+  message: string,
+): { error: { code: string; message: string; issues: never[] } } {
+  return { error: { code, message, issues: [] } };
+}
 
-    const job = await withTenantTransaction(auth.schemaName, (client) =>
-      loadTrainingJobProgress(client, params.trainingJobId),
-    );
-    if (!job) {
-      set.status = 404;
-      return { error: { code: "TRAINING_JOB_NOT_FOUND", message: "Training job was not found" } };
-    }
+export type TrainingRouteDependencies = {
+  withTenantTransaction: typeof withTenantTransaction;
+  cancelTrainingJobRequest: typeof cancelTrainingJobRequest;
+};
 
-    return job;
-  },
-).post(
-  "/",
-  async ({ request, set }) => {
-    const auth = getAuthContext(request.headers);
+export function createTrainingRoutes(
+  overrides: Partial<TrainingRouteDependencies> = {},
+) {
+  const dependencies: TrainingRouteDependencies = {
+    withTenantTransaction,
+    cancelTrainingJobRequest,
+    ...overrides,
+  };
 
-    if (!auth) {
-      set.status = 401;
+  return new Elysia({ prefix: "/training-jobs" })
+    .get("/:trainingJobId", async ({ params, request, set }) => {
+      const auth =
+        getAuthContext(request.headers) ?? (await resolveNucleusAuth(request));
 
-      return {
-        error: {
-          code: "UNAUTHENTICATED",
-          message: "Authentication is required",
-          issues: [],
-        },
-      };
-    }
+      if (!auth) {
+        set.status = 401;
+        return requestError("UNAUTHENTICATED", "Authentication is required");
+      }
 
-    if (!hasClaim(auth, CREATE_TRAINING_JOB_CLAIM)) {
-      set.status = 403;
+      if (!hasClaim(auth, CREATE_TRAINING_JOB_CLAIM)) {
+        set.status = 403;
+        return requestError(
+          "FORBIDDEN",
+          "Training job access permission is required",
+        );
+      }
 
-      return {
-        error: {
-          code: "FORBIDDEN",
-          message: "Training job creation permission is required",
-          issues: [],
-        },
-      };
-    }
+      if (!TRAINING_JOB_ID_PATTERN.test(params.trainingJobId)) {
+        set.status = 400;
+        return requestError(
+          "INVALID_TRAINING_JOB_ID",
+          "Training job id is invalid",
+        );
+      }
 
-    const body = await parseTrainingJobBody(request);
-    if (!body.ok) {
-      set.status = 400;
-
-      return body.body;
-    }
-
-    const result = await withTenantTransaction(auth.schemaName, (client) =>
-      createTrainingJob(
-        createTrainingJobRepository(client),
+      const job = await dependencies.withTenantTransaction(
         auth.schemaName,
-        auth.userId,
-        body.body,
-      ),
+        (client) => loadTrainingJobProgress(client, params.trainingJobId),
+      );
+
+      if (!job) {
+        set.status = 404;
+        return requestError(
+          "TRAINING_JOB_NOT_FOUND",
+          "Training job was not found",
+        );
+      }
+
+      return job;
+    })
+    .post(
+      "/",
+      async ({ request, set }) => {
+        const auth = getAuthContext(request.headers);
+
+        if (!auth) {
+          set.status = 401;
+
+          return requestError(
+            "UNAUTHENTICATED",
+            "Authentication is required",
+          );
+        }
+
+        if (!hasClaim(auth, CREATE_TRAINING_JOB_CLAIM)) {
+          set.status = 403;
+
+          return requestError(
+            "FORBIDDEN",
+            "Training job creation permission is required",
+          );
+        }
+
+        const body = await parseTrainingJobBody(request);
+        if (!body.ok) {
+          set.status = 400;
+
+          return body.body;
+        }
+
+        const result = await dependencies.withTenantTransaction(
+          auth.schemaName,
+          (client) =>
+            createTrainingJob(
+              createTrainingJobRepository(client),
+              auth.schemaName,
+              auth.userId,
+              body.body,
+            ),
+        );
+
+        if (!result.ok) {
+          set.status = result.status;
+
+          return result.body;
+        }
+
+        set.status = 201;
+
+        return result.body;
+      },
+    )
+    .post(
+      "/:jobId/cancel",
+      async ({ request, params, set }) => {
+        const auth = getAuthContext(request.headers);
+
+        if (!auth) {
+          set.status = 401;
+
+          return requestError(
+            "UNAUTHENTICATED",
+            "Authentication is required",
+          );
+        }
+
+        if (!hasClaim(auth, CANCEL_TRAINING_JOB_CLAIM)) {
+          set.status = 403;
+
+          return requestError(
+            "FORBIDDEN",
+            "Training job cancellation permission is required",
+          );
+        }
+
+        if (!TRAINING_JOB_ID_PATTERN.test(params.jobId)) {
+          set.status = 400;
+
+          return requestError(
+            "INVALID_TRAINING_JOB_ID",
+            "The training job id is not a valid uuid",
+          );
+        }
+
+        const result = await dependencies.withTenantTransaction(
+          auth.schemaName,
+          (client) =>
+            dependencies.cancelTrainingJobRequest(
+              createTrainingJobRepository(client),
+              params.jobId,
+            ),
+        );
+
+        if (!result.ok) {
+          set.status = result.status;
+
+          return result.body;
+        }
+
+        set.status = 200;
+
+        return result.body;
+      },
     );
+}
 
-    if (!result.ok) {
-      set.status = result.status;
-
-      return result.body;
-    }
-
-    set.status = 201;
-
-    return result.body;
-  },
-);
+export const trainingRoutes = createTrainingRoutes();
 
 type ParsedTrainingJobBody =
   | { ok: true; body: CreateTrainingJobInput }

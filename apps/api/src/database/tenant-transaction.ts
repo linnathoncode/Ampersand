@@ -44,7 +44,7 @@ export async function withTenantTransaction<T>(
   }
 }
 
-function assertTenantSchemaName(schemaName: string): void {
+export function assertTenantSchemaName(schemaName: string): void {
   if (!/^[a-z_][a-z0-9_]*$/.test(schemaName)) {
     throw new Error(`Unsafe PosgreSQL schema identifier: ${schemaName}`);
   }

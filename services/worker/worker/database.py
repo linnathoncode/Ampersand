@@ -2,10 +2,11 @@
 
 The worker connects straight to PostgreSQL (the durable job queue) and must
 never expose a public HTTP endpoint. This module manages connectivity, health
-checks, and job claiming with ``FOR UPDATE SKIP LOCKED``. Tenant data lives in
-per-tenant schemas, so every job operation runs inside a transaction scoped to
-one validated tenant schema. The connection string is never included in error
-messages.
+and health checks, and job claiming with ``FOR UPDATE SKIP LOCKED``.
+Candidate model registration lives on the Nucleus side; this module only
+owns the worker's queue operations. Tenant data lives in per-tenant schemas,
+so every job operation runs inside a transaction scoped to one validated
+tenant schema. The connection string is never included in error messages.
 """
 
 from __future__ import annotations
@@ -84,9 +85,12 @@ _LOOKUP_JOB_SQL = (
 
 _LOAD_JOB_CONTEXT_SQL = """
     SELECT
-        tj.id, tj.fingerprint, tj.training_config, tj.max_runtime_seconds,
-        ds.id, ds.storage_uri, ds.storage_format, ds.content_sha256, ds.row_count,
-        dd.id, dd.source_schema, dd.source_table, dd.target_column, dd.time_column,
+        tj.id::text, tj.fingerprint, tj.training_config,
+        tj.max_runtime_seconds,
+        ds.id::text, ds.storage_uri, ds.storage_format,
+        ds.content_sha256, ds.row_count,
+        dd.id::text, dd.source_schema, dd.source_table, dd.target_column,
+        dd.time_column,
         dc.column_name, dc.role, dc.data_type, dc.is_nullable, dc.position
     FROM training_jobs tj
     JOIN dataset_snapshots ds ON ds.id = tj.dataset_snapshot_id
@@ -109,7 +113,6 @@ _UPDATE_PROGRESS_SQL = """
       AND claimed_by = %(worker_id)s
       AND status = 'running'
 """
-
 
 @dataclass(frozen=True)
 class DatasetColumn:
@@ -154,6 +157,7 @@ class ClaimedJob:
     training_config: object
     max_runtime_seconds: int
     schema_name: str
+
 
 
 class Database:

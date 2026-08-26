@@ -158,3 +158,56 @@ export async function insertTrainingJob(
     throw error;
   }
 }
+
+export type CancelTrainingJobOutcome =
+  | { ok: true; fromStatus: "queued" | "running" }
+  | {
+      ok: false;
+      reason: "not-found" | "terminal";
+      currentStatus: string | null;
+    };
+
+const CANCEL_TRAINING_JOB_SQL = `
+    WITH target AS (
+      SELECT id, status
+      FROM training_jobs
+      WHERE id = $1 AND status IN ('queued', 'running')
+      FOR NO KEY UPDATE
+    )
+    UPDATE training_jobs tj
+    SET status = 'cancelled',
+        finished_at = now(),
+        updated_at = now()
+    FROM target
+    WHERE tj.id = target.id
+    RETURNING target.status AS from_status
+`;
+
+const TRAINING_JOB_STATUS_SQL =
+  "SELECT status FROM training_jobs WHERE id = $1";
+
+export async function cancelTrainingJob(
+  pool: PoolClient,
+  jobId: string,
+): Promise<CancelTrainingJobOutcome> {
+  const updated = await pool.query<{
+    from_status: "queued" | "running";
+  }>(CANCEL_TRAINING_JOB_SQL, [jobId]);
+
+  const cancelled = updated.rows[0];
+  if (cancelled) {
+    return { ok: true, fromStatus: cancelled.from_status };
+  }
+
+  const lookup = await pool.query<{ status: string }>(
+    TRAINING_JOB_STATUS_SQL,
+    [jobId],
+  );
+  const row = lookup.rows[0];
+
+  if (!row) {
+    return { ok: false, reason: "not-found", currentStatus: null };
+  }
+
+  return { ok: false, reason: "terminal", currentStatus: row.status };
+}

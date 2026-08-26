@@ -324,3 +324,22 @@ class TrainingOnnxPredictionMismatchError(TrainingOnnxError):
     """ONNX predictions differ from the fitted Python pipeline beyond tolerance."""
 
     code = "TRAINING_ONNX_PREDICTION_MISMATCH"
+
+
+class TrainingResultSubmissionError(WorkerError):
+    """The validated result could not be handed to Nucleus.
+
+    When Nucleus answered with a structured rejection, ``server_error_code``
+    carries the stable code the job should be failed with; otherwise the
+    generic submission code is used. Transport failures are retried by the
+    submitter; once retries are exhausted this error is raised so the job
+    stays recoverable work for the later recovery scope.
+    """
+
+    code = "TRAINING_RESULT_SUBMISSION_FAILED"
+
+    def __init__(
+        self, message: str, *, server_error_code: str | None = None
+    ) -> None:
+        super().__init__(message)
+        self.server_error_code = server_error_code
