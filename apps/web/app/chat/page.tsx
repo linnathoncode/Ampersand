@@ -82,8 +82,10 @@ export default function ChatPage() {
   const [replacementTrainingJob, setReplacementTrainingJob] = useState<ReturnType<typeof findLatestQueuedTrainingJob>>(null);
   const [trainingAction, setTrainingAction] = useState<"publishing" | "retrying" | null>(null);
   const [trainingActionMessage, setTrainingActionMessage] = useState<string | null>(null);
+  const [publishedModelVersionId, setPublishedModelVersionId] = useState<string | null>(null);
   const composerInputRef = useRef<HTMLTextAreaElement>(null);
   const threadRef = useRef<HTMLDivElement>(null);
+  const authenticatedUserRef = useRef<string | null>(null);
   const isBusy = status === "submitted" || status === "streaming";
   const trainingJob = useMemo(() => findLatestQueuedTrainingJob(messages), [messages]);
   const currentTrainingJob = replacementTrainingJob ?? trainingJob;
@@ -113,6 +115,9 @@ export default function ChatPage() {
           ? event.detail
           : getAuthenticatedUserId();
 
+      if (authenticatedUserRef.current === changedUserId) return;
+
+      authenticatedUserRef.current = changedUserId;
       setHasRestoredConversation(false);
       setUserId(changedUserId ?? "");
     };
@@ -241,7 +246,7 @@ export default function ChatPage() {
 
       setTrainingProgress(progress);
       if (!terminalTrainingStatuses.has(progress.status)) {
-        timer = window.setTimeout(() => void loadProgress(), 1_500);
+        timer = window.setTimeout(() => void loadProgress(), 5_000);
       }
     };
 
@@ -285,6 +290,7 @@ export default function ChatPage() {
         },
       );
       if (!response.ok) throw new Error(await readActionError(response, "Model publication failed"));
+      setPublishedModelVersionId(modelVersionId);
       setTrainingActionMessage("Model published and available for tool discovery.");
     } catch (reason) {
       setTrainingActionMessage(reason instanceof Error ? reason.message : "Model publication failed");
@@ -319,6 +325,49 @@ export default function ChatPage() {
     } finally {
       setTrainingAction(null);
     }
+  }
+
+  function renderTrainingProgress(jobId: string): ReactNode {
+    if (!trainingProgress || trainingProgress.id !== jobId) return null;
+
+    return (
+      <div className={`training-progress training-progress-${trainingProgress.status}`} role="status">
+        <div>
+          <strong>{formatTrainingStatus(trainingProgress.status)}</strong>
+          <span>{trainingProgress.progressPercent}%</span>
+        </div>
+        <progress max={100} value={trainingProgress.progressPercent} />
+        <p>{trainingProgress.errorMessage ?? trainingProgress.progressMessage}</p>
+        {trainingProgress.status === "succeeded" && trainingProgress.modelVersionId && (
+          <button
+            className="training-action-button"
+            disabled={
+              trainingAction !== null ||
+              publishedModelVersionId === trainingProgress.modelVersionId
+            }
+            onClick={() => void publishTrainingModel(trainingProgress.modelVersionId!)}
+            type="button"
+          >
+            {trainingAction === "publishing"
+              ? "Publishing..."
+              : publishedModelVersionId === trainingProgress.modelVersionId
+                ? "Published"
+                : "Publish model"}
+          </button>
+        )}
+        {(trainingProgress.status === "failed" || trainingProgress.status === "dead") && (
+          <button
+            className="training-action-button"
+            disabled={trainingAction !== null}
+            onClick={() => void retryTrainingJob()}
+            type="button"
+          >
+            {trainingAction === "retrying" ? "Retrying..." : "Retry training"}
+          </button>
+        )}
+        {trainingActionMessage && <p className="training-action-message">{trainingActionMessage}</p>}
+      </div>
+    );
   }
 
   async function runSlashCommand(command: SlashCommand) {
@@ -430,6 +479,10 @@ export default function ChatPage() {
                             {part.state === "output-error" && (
                               <p className="tool-call-error">{part.errorText}</p>
                             )}
+                            {part.toolName === "start_model_training" &&
+                              part.state === "output-available" &&
+                              isQueuedTrainingOutput(part.output) &&
+                              renderTrainingProgress(part.output.job.id)}
                           </div>
                         </details>
                       );
@@ -460,37 +513,6 @@ export default function ChatPage() {
                   ? `Calling ${formatToolName(activeToolName)}`
                   : "Thinking"}
               </span>
-            </div>
-          )}
-          {trainingProgress && (
-            <div className={`training-progress training-progress-${trainingProgress.status}`} role="status">
-              <div>
-                <strong>{formatTrainingStatus(trainingProgress.status)}</strong>
-                <span>{trainingProgress.progressPercent}%</span>
-              </div>
-              <progress max={100} value={trainingProgress.progressPercent} />
-              <p>{trainingProgress.errorMessage ?? trainingProgress.progressMessage}</p>
-              {trainingProgress.status === "succeeded" && trainingProgress.modelVersionId && (
-                <button
-                  className="training-action-button"
-                  disabled={trainingAction !== null}
-                  onClick={() => void publishTrainingModel(trainingProgress.modelVersionId!)}
-                  type="button"
-                >
-                  {trainingAction === "publishing" ? "Publishing..." : "Publish model"}
-                </button>
-              )}
-              {(trainingProgress.status === "failed" || trainingProgress.status === "dead") && (
-                <button
-                  className="training-action-button"
-                  disabled={trainingAction !== null}
-                  onClick={() => void retryTrainingJob()}
-                  type="button"
-                >
-                  {trainingAction === "retrying" ? "Retrying..." : "Retry training"}
-                </button>
-              )}
-              {trainingActionMessage && <p className="training-action-message">{trainingActionMessage}</p>}
             </div>
           )}
         </div>

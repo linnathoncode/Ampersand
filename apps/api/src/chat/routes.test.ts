@@ -46,11 +46,17 @@ describe("chat routes", () => {
     expect(Object.keys(tools)).toContain("start_model_training");
   });
 
-  it("recognizes only explicit confirmation messages", () => {
-    expect(latestUserConfirmedTraining([userMessage("Start training.")])).toBe(true);
-    expect(latestUserConfirmedTraining([userMessage("yes")])).toBe(true);
-    expect(latestUserConfirmedTraining([userMessage("/train")])).toBe(true);
-    expect(latestUserConfirmedTraining([userMessage("What would this train?")])).toBe(false);
+  it("recognizes an explicit confirmation immediately after a training summary", () => {
+    expect(
+      latestUserConfirmedTraining([confirmationRequiredMessage(), userMessage("yes")]),
+    ).toBe(true);
+    expect(
+      latestUserConfirmedTraining([confirmationRequiredMessage(), userMessage("/train")]),
+    ).toBe(true);
+    expect(latestUserConfirmedTraining([userMessage("Start training.")])).toBe(false);
+    expect(
+      latestUserConfirmedTraining([confirmationRequiredMessage(), userMessage("What would this train?")]),
+    ).toBe(false);
   });
 
   it("converts simple training tool inputs into the internal contract", () => {
@@ -161,6 +167,26 @@ function queuedTrainingMessage() {
         state: "output-available" as const,
         input: {},
         output: { outcome: "queued" as const },
+      },
+    ],
+  };
+}
+
+function confirmationRequiredMessage() {
+  return {
+    id: "message-confirmation",
+    role: "assistant" as const,
+    parts: [
+      {
+        type: "dynamic-tool" as const,
+        toolName: "start_model_training",
+        toolCallId: "training-call-1",
+        state: "output-available" as const,
+        input: {},
+        output: {
+          outcome: "rejected" as const,
+          code: "CONFIRMATION_REQUIRED" as const,
+        },
       },
     ],
   };

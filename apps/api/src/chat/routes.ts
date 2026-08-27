@@ -43,7 +43,7 @@ const CHAT_INSTRUCTIONS = `You are the Ampersand assistant. Available tools are 
 Call list_source_tables when the user asks about datasets, tables, uploaded data, or data available for training. Call it immediately instead of describing it or asking which dataset they mean.
 Call list_prediction_tools when the user asks which models or prediction tools are available. Do not call list_source_tables for that request.
 Training and prediction are different tasks. Use start_model_training only when the user explicitly asks to train, create, build, or fit a model. A request to predict, estimate, forecast, or use an existing model must never call start_model_training. For those requests, select the matching published prediction tool and collect only its actual input values.
-For training, gather a model name, source table, feature columns, and one numeric target. Never invent columns or infer correlation from column names. Show a short summary and ask for confirmation. Call start_model_training only after the user confirms.
+For training, gather a model name, source table, feature columns, and one numeric target. Never ask for, invent, or send a time column. The training service uses its deterministic seeded split for conversational training. Never invent columns or infer correlation from column names. Show a short summary and ask for confirmation. Call start_model_training only after the user confirms.
 Confirmation is required exactly once. When start_model_training returns a queued outcome, tell the user that the job is queued and stop. Do not ask them to confirm, proceed, or start training again.
 Never send table names, column names, a target, or a feature list to a prediction tool. Prediction tools accept actual values for one observation and should only be called when the user asks for a prediction.
 Report actual tool results and explain rejections without inventing results. Respond normally when no tool is relevant.`;
@@ -169,7 +169,7 @@ export function createConversationTools(
   trainingConfirmed = false,
   trainingAlreadyQueued = false,
 ): ToolSet {
-  let trainingExecution: Promise<unknown> | undefined;
+  const trainingExecutions = new Map<string, Promise<unknown>>();
   const predictionTools = Object.fromEntries(
     definitions.map((definition) => [
           definition.toolName,
@@ -269,10 +269,6 @@ export function createConversationTools(
             type: "string",
             pattern: "^[A-Za-z_][A-Za-z0-9_]*$",
           },
-          timeColumn: {
-            type: "string",
-            pattern: "^[A-Za-z_][A-Za-z0-9_]*$",
-          },
         },
       }),
       execute: async (input) => {
@@ -284,12 +280,19 @@ export function createConversationTools(
           };
         }
 
-        trainingExecution ??= startModelTraining(
-          auth,
-          toStartModelTrainingInput(input as TrainingToolInput),
-        );
+        const trainingInput = input as TrainingToolInput;
+        const executionKey = JSON.stringify(trainingInput);
+        let execution = trainingExecutions.get(executionKey);
 
-        return trainingExecution;
+        if (!execution) {
+          execution = startModelTraining(
+            auth,
+            toStartModelTrainingInput(trainingInput),
+          );
+          trainingExecutions.set(executionKey, execution);
+        }
+
+        return execution;
       },
     });
   }
@@ -361,9 +364,10 @@ export function toStartModelTrainingInput(
 }
 
 export function latestUserConfirmedTraining(messages: UIMessage[]): boolean {
-  const latestUserMessage = [...messages]
-    .reverse()
-    .find((message) => message.role === "user");
+  const latestUserIndex = messages.findLastIndex(
+    (message) => message.role === "user",
+  );
+  const latestUserMessage = messages[latestUserIndex];
   if (!latestUserMessage) return false;
 
   const text = latestUserMessage.parts
@@ -376,8 +380,35 @@ export function latestUserConfirmedTraining(messages: UIMessage[]): boolean {
     .trim()
     .toLowerCase();
 
-  return /^(yes|confirm(ed)?|start( training)?|train it|proceed|go ahead|\/train)[.! ]*$/.test(
-    text,
+  const isExplicitConfirmation =
+    /^(yes|confirm(ed)?|start( training)?|train it|proceed|go ahead|\/train)[.! ]*$/.test(
+      text,
+    );
+  if (!isExplicitConfirmation) return false;
+
+  const latestAssistantMessage = messages
+    .slice(0, latestUserIndex)
+    .findLast((message) => message.role === "assistant");
+
+  return latestAssistantMessage?.parts.some(
+    (part) =>
+      part.type === "dynamic-tool" &&
+      part.toolName === "start_model_training" &&
+      part.state === "output-available" &&
+      isConfirmationRequiredResult(part.output),
+  ) ?? false;
+}
+
+function isConfirmationRequiredResult(
+  value: unknown,
+): value is { outcome: "rejected"; code: "CONFIRMATION_REQUIRED" } {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "outcome" in value &&
+    value.outcome === "rejected" &&
+    "code" in value &&
+    value.code === "CONFIRMATION_REQUIRED"
   );
 }
 
