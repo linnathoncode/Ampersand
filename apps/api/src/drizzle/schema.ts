@@ -883,20 +883,28 @@ export const datasetSnapshotsColumns = {
 	datasetDefinitionId: uuid('dataset_definition_id').notNull().references(() => datasetDefinitions.id, { onDelete: 'cascade' }),
 	storageUri: text('storage_uri').notNull(),
 	storageFormat: varchar('storage_format', { length: 16 }).notNull(),
-	contentSha256: char('content_sha256', { length: 64 }).notNull().unique(),
+	contentSha256: char('content_sha256', { length: 64 }).notNull(),
 	rowCount: bigint('row_count', { mode: 'number' }).notNull(),
 	schemaSummary: jsonb('schema_summary').notNull(),
 	frozenAt: timestamp('frozen_at', { withTimezone: true }).notNull(),
 };
 
-export const datasetSnapshots = pgTable('dataset_snapshots', datasetSnapshotsColumns);
+export const datasetSnapshotsIndexes = (t: { datasetDefinitionId: PgColumn; contentSha256: PgColumn }) => [
+	uniqueIndex('uq_dataset_snapshots_definition_content').on(t.datasetDefinitionId, t.contentSha256),
+];
+
+export const datasetSnapshots = pgTable('dataset_snapshots', datasetSnapshotsColumns, (t) => [
+	uniqueIndex('uq_dataset_snapshots_definition_content').on(t.datasetDefinitionId, t.contentSha256),
+]);
 
 export function createDatasetSnapshotsForSchema(schema: ReturnType<typeof pgSchema>) {
 	const datasetDefinitionsTable = schema.table('dataset_definitions', datasetDefinitionsColumns);
 	return schema.table('dataset_snapshots', {
 		...datasetSnapshotsColumns,
 		datasetDefinitionId: uuid('dataset_definition_id').notNull().references(() => datasetDefinitionsTable.id, { onDelete: 'cascade' }),
-	});
+	}, (t) => [
+		uniqueIndex('uq_dataset_snapshots_definition_content').on(t.datasetDefinitionId, t.contentSha256),
+	]);
 }
 
 export const trainingJobsColumns = {
@@ -907,7 +915,7 @@ export const trainingJobsColumns = {
 	createdBy: uuid('created_by'),
 	updatedBy: uuid('updated_by'),
 	datasetSnapshotId: uuid('dataset_snapshot_id').notNull().references(() => datasetSnapshots.id, { onDelete: 'restrict' }),
-	fingerprint: char('fingerprint', { length: 64 }).notNull().unique(),
+	fingerprint: char('fingerprint', { length: 64 }).notNull(),
 	status: varchar('status', { length: 16 }).notNull(),
 	trainingConfig: jsonb('training_config').notNull(),
 	progressPercent: integer('progress_percent').notNull(),
@@ -923,14 +931,22 @@ export const trainingJobsColumns = {
 	maxRuntimeSeconds: integer('max_runtime_seconds').notNull(),
 };
 
-export const trainingJobs = pgTable('training_jobs', trainingJobsColumns);
+export const trainingJobsIndexes = (t: { fingerprint: PgColumn }) => [
+	index('idx_training_jobs_fingerprint').on(t.fingerprint),
+];
+
+export const trainingJobs = pgTable('training_jobs', trainingJobsColumns, (t) => [
+	index('idx_training_jobs_fingerprint').on(t.fingerprint),
+]);
 
 export function createTrainingJobsForSchema(schema: ReturnType<typeof pgSchema>) {
-	const datasetSnapshotsTable = schema.table('dataset_snapshots', datasetSnapshotsColumns);
+	const datasetSnapshotsTable = schema.table('dataset_snapshots', datasetSnapshotsColumns, (t) => datasetSnapshotsIndexes(t));
 	return schema.table('training_jobs', {
 		...trainingJobsColumns,
 		datasetSnapshotId: uuid('dataset_snapshot_id').notNull().references(() => datasetSnapshotsTable.id, { onDelete: 'restrict' }),
-	});
+	}, (t) => [
+		index('idx_training_jobs_fingerprint').on(t.fingerprint),
+	]);
 }
 
 export const modelVersionsColumns = {
@@ -957,7 +973,7 @@ export const modelVersions = pgTable('model_versions', modelVersionsColumns);
 
 export function createModelVersionsForSchema(schema: ReturnType<typeof pgSchema>) {
 	const datasetDefinitionsTable = schema.table('dataset_definitions', datasetDefinitionsColumns);
-	const trainingJobsTable = schema.table('training_jobs', trainingJobsColumns);
+	const trainingJobsTable = schema.table('training_jobs', trainingJobsColumns, (t) => trainingJobsIndexes(t));
 	const usersTable = schema.table('users', usersColumns, (t) => usersIndexes(t));
 	return schema.table('model_versions', {
 		...modelVersionsColumns,

@@ -163,6 +163,7 @@ class TestSuccess:
         assert request.get_header("Content-type") == "application/json"
         assert request.get_header("Authorization") == f"Bearer {TOKEN}"
         assert request.get_header("X-tenant-id") == "tenant_ampersand_dev"
+        assert request.get_header("X-service-id") == "ampersand-worker"
 
     def test_failed_recorded_response_is_accepted(self, monkeypatch):
         patch_urlopen(monkeypatch, [{"status": "failed-recorded"}])

@@ -8,6 +8,7 @@ import type {
 import type { PoolClient } from "pg";
 
 import type { LoadedDatasetColumn } from "../dataset/repository";
+import { tenantDataSchemaName } from "../dataset/tenant-data-schema";
 import { buildTrainingFingerprint } from "./fingerprint";
 import {
   resolveHeartbeatExpirySeconds,
@@ -18,6 +19,7 @@ import {
 import {
   cancelTrainingJob,
   countActiveTrainingJobs,
+  hasBlockingTrainingFingerprint,
   insertTrainingJob,
   loadLatestValidSnapshot,
   lockTrainingSubmissionQuota,
@@ -45,6 +47,7 @@ export type TrainingJobRepository = {
   lockTrainingSubmissionQuota(schemaName: string): Promise<void>;
   countActiveTrainingJobs(): Promise<number>;
   recoverAbandonedTrainingJobs(expirySeconds: number): Promise<number>;
+  hasBlockingTrainingFingerprint(fingerprint: string): Promise<boolean>;
   insertTrainingJob(input: InsertTrainingJobInput): Promise<InsertedTrainingJob>;
   cancelTrainingJob(jobId: string): Promise<CancelTrainingJobOutcome>;
 };
@@ -64,6 +67,8 @@ export function createTrainingJobRepository(
     countActiveTrainingJobs: () => countActiveTrainingJobs(client),
     recoverAbandonedTrainingJobs: (expirySeconds) =>
       recoverAbandonedTrainingJobs(client, expirySeconds),
+    hasBlockingTrainingFingerprint: (fingerprint) =>
+      hasBlockingTrainingFingerprint(client, fingerprint),
     insertTrainingJob: (input) => insertTrainingJob(client, input),
     cancelTrainingJob: (jobId) => cancelTrainingJob(client, jobId),
   };
@@ -106,15 +111,6 @@ export function validateDatasetTrainability(
   return issues;
 }
 
-export function isUniqueViolation(error: unknown): boolean {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    "code" in error &&
-    (error as { code: unknown }).code === "23505"
-  );
-}
-
 export async function createTrainingJob(
   repository: TrainingJobRepository,
   schemaName: string,
@@ -124,7 +120,10 @@ export async function createTrainingJob(
   const definition = await repository.loadDatasetDefinition(
     input.datasetDefinitionId,
   );
-  if (!definition || definition.sourceSchema !== schemaName) {
+  if (
+    !definition ||
+    definition.sourceSchema !== tenantDataSchemaName(schemaName)
+  ) {
     return trainingRequestError(
       404,
       "DATASET_DEFINITION_NOT_FOUND",
@@ -202,31 +201,28 @@ export async function createTrainingJob(
     );
   }
 
-  try {
-    const inserted = await repository.insertTrainingJob({
-      datasetSnapshotId: snapshot.id,
-      fingerprint,
-      trainingConfig,
-      maxRuntimeSeconds: trainingConfig.maxRuntimeSeconds,
-      createdBy: userId,
-    });
-
-    return {
-      ok: true,
-      status: 201,
-      body: toTrainingJobResponse(inserted, snapshot, fingerprint, trainingConfig),
-    };
-  } catch (error) {
-    if (isUniqueViolation(error)) {
-      return trainingRequestError(
-        409,
-        "DUPLICATE_TRAINING_REQUEST",
-        "An equivalent training job already exists",
-        [],
-      );
-    }
-    throw error;
+  if (await repository.hasBlockingTrainingFingerprint(fingerprint)) {
+    return trainingRequestError(
+      409,
+      "DUPLICATE_TRAINING_REQUEST",
+      "An equivalent active or completed training job already exists",
+      [],
+    );
   }
+
+  const inserted = await repository.insertTrainingJob({
+    datasetSnapshotId: snapshot.id,
+    fingerprint,
+    trainingConfig,
+    maxRuntimeSeconds: trainingConfig.maxRuntimeSeconds,
+    createdBy: userId,
+  });
+
+  return {
+    ok: true,
+    status: 201,
+    body: toTrainingJobResponse(inserted, snapshot, fingerprint, trainingConfig),
+  };
 }
 
 export type TrainingCancellationError = {

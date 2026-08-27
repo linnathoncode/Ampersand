@@ -14,6 +14,7 @@ import {
 import {
   insertDatasetSnapshot,
   inspectSourceTable,
+  loadDatasetSnapshotByContent,
   loadDatasetColumns,
   loadDatasetDefinition,
 } from "./repository";
@@ -24,6 +25,7 @@ import type {
   SnapshotStorageRow,
   WrittenSnapshot,
 } from "./storage";
+import { tenantDataSchemaName } from "./tenant-data-schema";
 
 const POSTGRESQL_IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const TIMEZONE_LESS_TYPES = new Set(["date", "timestamp"]);
@@ -48,9 +50,16 @@ export async function createDatasetSnapshot(
     });
   }
 
+  if (definition.sourceSchema !== tenantDataSchemaName(schemaName)) {
+    return snapshotError(422, "DATASET_SOURCE_TABLE_NOT_ALLOWED", {
+      path: "sourceTable",
+      message: `Source table '${definition.sourceTable}' is outside the tenant data schema`,
+    });
+  }
+
   const sourceLookup = await inspectSourceTable(
     pool,
-    schemaName,
+    definition.sourceSchema,
     definition.sourceTable,
   );
   if (sourceLookup.kind === "not-found") {
@@ -120,7 +129,7 @@ export async function createDatasetSnapshot(
     .map((column) => `"${column.name}" ASC NULLS LAST`)
     .join(", ");
 
-  const sql = `SELECT ${quotedColumns} FROM "${schemaName}"."${definition.sourceTable}" ORDER BY ${orderBy}`;
+  const sql = `SELECT ${quotedColumns} FROM "${definition.sourceSchema}"."${definition.sourceTable}" ORDER BY ${orderBy}`;
   const storeColumns: SnapshotStorageColumn[] = columns.map((column) => ({
     name: column.name,
     dataType: column.dataType,
@@ -216,10 +225,27 @@ export async function createDatasetSnapshot(
     await storage.deleteSnapshot(written.uri).catch(() => {});
 
     if (isUniqueViolation(error)) {
-      return snapshotError(409, "SNAPSHOT_CONTENT_COLLISION", {
-        path: "contentSha256",
-        message: "A snapshot with identical content already exists",
-      });
+      const existing = await loadDatasetSnapshotByContent(
+        pool,
+        definitionId,
+        written.contentSha256,
+      );
+
+      if (existing) {
+        return {
+          ok: true,
+          body: {
+            id: existing.id,
+            datasetDefinitionId: definitionId,
+            storageUri: existing.storageUri,
+            format: "parquet",
+            contentSha256: existing.contentSha256,
+            rowCount: existing.rowCount,
+            schemaSummary: existing.schemaSummary,
+            frozenAt: existing.frozenAt.toISOString(),
+          },
+        };
+      }
     }
 
     throw error;

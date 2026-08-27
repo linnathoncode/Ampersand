@@ -19,7 +19,7 @@
 
 ## Required Invariants
 
-1. The same training fingerprint is not trained twice.
+1. The same training fingerprint is not trained twice after a successful run; failed, cancelled, or dead attempts may be retried.
 2. An unpublished model version cannot be called.
 3. A tenant cannot access another tenant's model.
 4. A running job cannot remain alive without a recent heartbeat.

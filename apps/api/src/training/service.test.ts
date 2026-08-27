@@ -17,12 +17,13 @@ const datasetDefinitionId = "11111111-1111-4111-8111-111111111111";
 const jobId = "55555555-5555-4555-8555-555555555555";
 const snapshotId = "22222222-2222-4222-8222-222222222222";
 const schemaName = "tenant_ampersand_dev";
+const dataSchemaName = "tenant_ampersand_dev_data";
 const userId = "33333333-3333-4333-8333-333333333333";
 
 const definition: LoadedDatasetDefinition = {
   id: datasetDefinitionId,
   name: "Energy predictor",
-  sourceSchema: schemaName,
+  sourceSchema: dataSchemaName,
   sourceTable: "energy_readings",
   createdBy: userId,
 };
@@ -51,6 +52,7 @@ function createRepository(overrides: Partial<TrainingJobRepository> = {}): Train
     lockTrainingSubmissionQuota: async () => {},
     countActiveTrainingJobs: async () => 0,
     recoverAbandonedTrainingJobs: async () => 0,
+    hasBlockingTrainingFingerprint: async () => false,
     insertTrainingJob: async (input) => ({
       id: "44444444-4444-4444-8444-444444444444",
       queuedAt: new Date("2026-08-12T08:00:00.000Z"),
@@ -174,7 +176,7 @@ describe("createTrainingJob", () => {
       createRepository({
         loadDatasetDefinition: async () => ({
           ...definition,
-          sourceSchema: "tenant_other",
+          sourceSchema: "tenant_other_data",
         }),
       }),
       schemaName,
@@ -259,12 +261,10 @@ describe("createTrainingJob", () => {
     expect(steps).toEqual(["lock", "count"]);
   });
 
-  test("rejects a concurrent duplicate with a unique violation", async () => {
+  test("rejects an equivalent active or completed training job", async () => {
     const result = await createTrainingJob(
       createRepository({
-        insertTrainingJob: async () => {
-          throw { code: "23505", constraint: "training_jobs_fingerprint_key" };
-        },
+        hasBlockingTrainingFingerprint: async () => true,
       }),
       schemaName,
       userId,
@@ -277,7 +277,7 @@ describe("createTrainingJob", () => {
     expect(result.body.error.code).toBe("DUPLICATE_TRAINING_REQUEST");
   });
 
-  test("rethrows non-duplicate database errors", async () => {
+  test("rethrows database insertion errors", async () => {
     const repository = createRepository({
       insertTrainingJob: async () => {
         throw new Error("connection lost");

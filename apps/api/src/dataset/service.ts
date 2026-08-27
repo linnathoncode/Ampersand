@@ -14,6 +14,7 @@ import {
   insertDatasetDefinition,
 } from "./repository";
 import type { SourceColumnInfo } from "./schema-inference";
+import { tenantDataSchemaName } from "./tenant-data-schema";
 
 export type CreateDatasetDefinitionResult =
   | { ok: true; body: DatasetDefinitionResponse }
@@ -39,7 +40,11 @@ export async function createDatasetDefinition(
   userId: string,
   input: CreateDatasetDefinitionInput,
 ): Promise<CreateDatasetDefinitionResult> {
-  const lookup = await inspectSourceTable(pool, schemaName, input.sourceTable);
+  const lookup = await inspectSourceTable(
+    pool,
+    tenantDataSchemaName(schemaName),
+    input.sourceTable,
+  );
 
   if (lookup.kind === "not-found") {
     return {

@@ -4,6 +4,7 @@ import type { PoolClient } from "pg";
 
 import { inferColumnType } from "./schema-inference";
 import { MANAGED_TABLE_NAMES } from "./repository";
+import { ensureTenantDataSchema, tenantDataSchemaName } from "./tenant-data-schema";
 
 const IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const ISO_DATE_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
@@ -25,19 +26,20 @@ export async function listSourceTables(
   client: PoolClient,
   schemaName: string,
 ): Promise<SourceTable[]> {
+  const dataSchemaName = tenantDataSchemaName(schemaName);
   const tables = await client.query<{ table_name: string }>(
     `SELECT table_name
      FROM information_schema.tables
      WHERE table_schema = $1 AND table_type = 'BASE TABLE'
      ORDER BY table_name`,
-    [schemaName],
+    [dataSchemaName],
   );
 
   const sourceNames = tables.rows
     .map((row) => row.table_name)
     .filter((name) => !MANAGED_TABLE_NAMES.has(name));
 
-  return Promise.all(sourceNames.map((name) => describeSourceTable(client, schemaName, name)));
+  return Promise.all(sourceNames.map((name) => describeSourceTable(client, dataSchemaName, name)));
 }
 
 export async function importCsvSourceTable(
@@ -74,9 +76,11 @@ export async function importCsvSourceTable(
     return importError(422, "INVALID_CSV_HEADERS", "Every CSV header must be a valid PostgreSQL identifier");
   }
 
+  const dataSchemaName = await ensureTenantDataSchema(client, schemaName);
+
   const exists = await client.query(
     `SELECT 1 FROM information_schema.tables WHERE table_schema = $1 AND table_name = $2`,
-    [schemaName, tableName],
+    [dataSchemaName, tableName],
   );
   if ((exists.rowCount ?? 0) > 0) {
     return importError(409, "SOURCE_TABLE_EXISTS", `A table named '${tableName}' already exists`);
@@ -95,12 +99,12 @@ export async function importCsvSourceTable(
     .map((column) => `${quoteIdentifier(column.name)} ${toPostgresType(column.dataType)}`)
     .join(", ");
   await client.query(
-    `CREATE TABLE ${quoteIdentifier(schemaName)}.${quoteIdentifier(tableName)} (${definitions})`,
+    `CREATE TABLE ${quoteIdentifier(dataSchemaName)}.${quoteIdentifier(tableName)} (${definitions})`,
   );
 
   for (let offset = 0; offset < records.length; offset += INSERT_BATCH_SIZE) {
     const batch = records.slice(offset, offset + INSERT_BATCH_SIZE);
-    await insertCsvBatch(client, schemaName, tableName, columns, batch);
+    await insertCsvBatch(client, dataSchemaName, tableName, columns, batch);
   }
 
   return {

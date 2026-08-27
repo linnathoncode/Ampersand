@@ -102,6 +102,23 @@ export async function countActiveTrainingJobs(
   return Number(result.rows[0]?.count ?? 0);
 }
 
+export async function hasBlockingTrainingFingerprint(
+  pool: PoolClient,
+  fingerprint: string,
+): Promise<boolean> {
+  const result = await pool.query(
+    `SELECT 1
+     FROM training_jobs
+     WHERE fingerprint = $1
+       AND is_active = true
+       AND status IN ('queued', 'running', 'succeeded')
+     LIMIT 1`,
+    [fingerprint],
+  );
+
+  return result.rowCount === 1;
+}
+
 export type InsertTrainingJobInput = {
   datasetSnapshotId: string;
   fingerprint: string;

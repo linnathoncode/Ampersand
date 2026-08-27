@@ -51,8 +51,9 @@ describe("CSV source-table import", () => {
         { name: "note", dataType: "text", isNullable: true },
       ],
     });
-    expect(queries.some(({ sql }) => sql.includes('CREATE TABLE "tenant_ampersand_dev"."energy_readings"'))).toBe(true);
-    expect(queries.some(({ sql }) => sql.includes('INSERT INTO "tenant_ampersand_dev"."energy_readings"'))).toBe(true);
+    expect(queries.some(({ sql }) => sql.includes('CREATE SCHEMA IF NOT EXISTS "tenant_ampersand_dev_data"'))).toBe(true);
+    expect(queries.some(({ sql }) => sql.includes('CREATE TABLE "tenant_ampersand_dev_data"."energy_readings"'))).toBe(true);
+    expect(queries.some(({ sql }) => sql.includes('INSERT INTO "tenant_ampersand_dev_data"."energy_readings"'))).toBe(true);
   });
 
   test("rejects unsafe table names before querying PostgreSQL", async () => {

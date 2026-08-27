@@ -47,7 +47,7 @@ try {
       JSON.stringify([
         {
           allow_header_auth: true,
-          allowed_services: ["ampersand-web"],
+          allowed_services: ["ampersand-web", "ampersand-worker"],
         },
       ]),
       subdomain,

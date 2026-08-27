@@ -6,6 +6,7 @@ import type {
 import type { PoolClient } from "pg";
 
 import { inferColumnType, type SourceColumnInfo } from "./schema-inference";
+import { tenantDataSchemaName } from "./tenant-data-schema";
 
 export const MANAGED_TABLE_NAMES = new Set([
   "users",
@@ -46,14 +47,18 @@ export type SourceTableLookup =
 
 export async function inspectSourceTable(
   pool: PoolClient,
-  schemaName: string,
+  sourceSchemaName: string,
   sourceTable: string,
 ): Promise<SourceTableLookup> {
+  if (MANAGED_TABLE_NAMES.has(sourceTable)) {
+    return { kind: "not-allowed" };
+  }
+
   const table = await pool.query<{ table_type: string }>(
     `SELECT table_type
      FROM information_schema.tables
      WHERE table_schema = $1 AND table_name = $2`,
-    [schemaName, sourceTable],
+    [sourceSchemaName, sourceTable],
   );
 
   if (!table.rows[0]) {
@@ -61,8 +66,7 @@ export async function inspectSourceTable(
   }
 
   if (
-    table.rows[0].table_type !== "BASE TABLE" ||
-    MANAGED_TABLE_NAMES.has(sourceTable)
+    table.rows[0].table_type !== "BASE TABLE"
   ) {
     return { kind: "not-allowed" };
   }
@@ -76,7 +80,7 @@ export async function inspectSourceTable(
      FROM information_schema.columns
      WHERE table_schema = $1 AND table_name = $2
      ORDER BY ordinal_position`,
-    [schemaName, sourceTable],
+    [sourceSchemaName, sourceTable],
   );
 
   return {
@@ -124,7 +128,7 @@ export async function insertDatasetDefinition(
      RETURNING id, created_at`,
     [
       input.name,
-      schemaName,
+      tenantDataSchemaName(schemaName),
       input.sourceTable,
       input.targetColumn,
       input.timeColumn,
@@ -249,6 +253,48 @@ export type InsertedDatasetSnapshot = {
   id: string;
   frozenAt: Date;
 };
+
+export type LoadedDatasetSnapshot = InsertedDatasetSnapshot & {
+  storageUri: string;
+  contentSha256: string;
+  rowCount: number;
+  schemaSummary: SchemaSummary;
+};
+
+export async function loadDatasetSnapshotByContent(
+  pool: PoolClient,
+  datasetDefinitionId: string,
+  contentSha256: string,
+): Promise<LoadedDatasetSnapshot | null> {
+  const result = await pool.query<{
+    id: string;
+    storage_uri: string;
+    content_sha256: string;
+    row_count: string;
+    schema_summary: SchemaSummary;
+    frozen_at: Date;
+  }>(
+    `SELECT id, storage_uri, content_sha256, row_count, schema_summary, frozen_at
+     FROM dataset_snapshots
+     WHERE dataset_definition_id = $1
+       AND content_sha256 = $2
+       AND is_active = true
+     LIMIT 1`,
+    [datasetDefinitionId, contentSha256],
+  );
+
+  const row = result.rows[0];
+  if (!row) return null;
+
+  return {
+    id: row.id,
+    storageUri: row.storage_uri,
+    contentSha256: row.content_sha256,
+    rowCount: Number(row.row_count),
+    schemaSummary: row.schema_summary,
+    frozenAt: row.frozen_at,
+  };
+}
 
 export async function insertDatasetSnapshot(
   pool: PoolClient,

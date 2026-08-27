@@ -86,6 +86,7 @@ def submit_training_result(
         # request before the endpoint handler reads it. Workers only ever
         # hold jobs for schemas listed active in that registry.
         "x-tenant-id": schema_name,
+        "x-service-id": "ampersand-worker",
         "Authorization": f"Bearer {config.nucleus_result_token}",
     }
     sleep_between_attempts = sleep if sleep is not None else time.sleep

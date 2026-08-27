@@ -28,7 +28,9 @@ This document covers the nine Ampersand-owned tables generated from `apps/api/sr
 
 ## Tenant ownership
 
-Nucleus uses a schema-per-tenant design. It resolves the authenticated request to a tenant schema before Ampersand data is accessed. Each tenant receives a separate copy of the Ampersand tables, so these tables do not contain a `tenant_id` column.
+Nucleus uses a schema-per-tenant design. It resolves the authenticated request to a tenant schema before Ampersand data is accessed. Each tenant receives a separate copy of the Ampersand operational tables, so these tables do not contain a `tenant_id` column.
+
+Uploaded source tables use a separate schema named `<tenant_schema>_data`. For example, `tenant_ampersand_dev` stores operational records while `tenant_ampersand_dev_data` stores imported training tables. This prevents Nucleus schema synchronization from treating uploaded tables as obsolete application tables. Dataset definitions store the qualified data-schema name in `source_schema`, and snapshot creation rejects definitions that point outside the authenticated tenant's data schema.
 
 ```text
 PostgreSQL database
@@ -263,7 +265,7 @@ The worker must verify a snapshot checksum before training. The inference servic
 
 ## Important invariants
 
-- A training fingerprint identifies one exact snapshot and training configuration; duplicate fingerprints are rejected.
+- A training fingerprint identifies one exact snapshot and training configuration. Equivalent queued, running, or succeeded jobs block duplicates; failed, cancelled, and dead jobs may be retried.
 - Job states are limited to `queued`, `running`, `succeeded`, `failed`, `cancelled`, and `dead`.
 - A running job must maintain a recent heartbeat.
 - Model states are limited to `candidate`, `published`, and `retired`; only a published model is callable.
@@ -281,7 +283,7 @@ The intended schema defines these unique keys:
 |---|---|---|
 | `dataset_columns` | (`dataset_definition_id`, `column_name`) | One description per source column in a definition |
 | `dataset_snapshots` | `content_sha256` | One record per frozen content digest |
-| `training_jobs` | `fingerprint` | Prevent duplicate training requests |
+| `training_jobs` | `fingerprint` | Find equivalent training attempts and prevent duplicate active or completed work |
 | `model_versions` | `training_job_id` | One model version per successful training job |
 | `model_versions` | (`dataset_definition_id`, `version_number`) | Unique sequential version within a dataset family |
 | `model_artifacts` | `model_version_id` | One ONNX artifact per model version |
@@ -325,3 +327,5 @@ SET search_path TO tenant_schema, public;
 ```
 
 The migration resolves unqualified table names against the active tenant schema and can safely be run again. PostgreSQL validates existing rows while adding the checks, foreign keys, and unique constraints, so invalid or duplicate existing data must be corrected before the migration can complete.
+
+`0003_dataset_snapshot_content_scope.sql` replaces the tenant-wide snapshot digest constraint with a dataset-scoped unique index. Repeated content for one dataset definition reuses the existing immutable snapshot, while separate definitions may snapshot the same source bytes without colliding.

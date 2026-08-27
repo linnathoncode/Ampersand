@@ -375,8 +375,7 @@
           "name": "content_sha256",
           "type": "char",
           "length": 64,
-          "notNull": true,
-          "unique": true
+          "notNull": true
         },
         {
           "name": "row_count",
@@ -393,6 +392,16 @@
           "name": "frozen_at",
           "type": "timestamptz",
           "notNull": true
+        }
+      ],
+      "indexes": [
+        {
+          "name": "uq_dataset_snapshots_definition_content",
+          "columns": [
+            "dataset_definition_id",
+            "content_sha256"
+          ],
+          "unique": true
         }
       ],
       "constraints": {
@@ -426,8 +435,7 @@
           "name": "fingerprint",
           "type": "char",
           "length": 64,
-          "notNull": true,
-          "unique": true
+          "notNull": true
         },
         {
           "name": "status",
@@ -492,6 +500,14 @@
           "name": "max_runtime_seconds",
           "type": "integer",
           "notNull": true
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_training_jobs_fingerprint",
+          "columns": [
+            "fingerprint"
+          ]
         }
       ],
       "constraints": {

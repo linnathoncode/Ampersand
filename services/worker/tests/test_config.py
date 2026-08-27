@@ -1,4 +1,5 @@
 import re
+from pathlib import Path
 
 import pytest
 
@@ -23,6 +24,9 @@ SECRET_PASSWORD = "s3cr3t-connection-password"
 DATABASE_URL = (
     f"postgresql://ampersand:{SECRET_PASSWORD}@localhost:5432/ampersand"
 )
+TEST_ARTIFACT_STORAGE_PATH = str(
+    (Path(__file__).resolve().parent / "artifacts").resolve()
+)
 
 
 def base_env(**overrides):
@@ -31,7 +35,7 @@ def base_env(**overrides):
         "WORKER_ID": "worker-test",
         "WORKER_POLL_INTERVAL_SECONDS": "5",
         "WORKER_HEARTBEAT_INTERVAL_SECONDS": "10",
-        "ARTIFACT_STORAGE_PATH": "/tmp/ampersand-artifacts",
+        "ARTIFACT_STORAGE_PATH": TEST_ARTIFACT_STORAGE_PATH,
         "NUCLEUS_INTERNAL_URL": "http://nucleus-internal.test/",
         "NUCLEUS_INTERNAL_TOKEN": "internal-secret",
         "WORKER_LOG_LEVEL": "INFO",
@@ -48,7 +52,7 @@ class TestConfigLoading:
         assert config.poll_interval_seconds == 5
         assert config.heartbeat_interval_seconds == 10
         assert config.claim_timeout_seconds == DEFAULT_CLAIM_TIMEOUT_SECONDS
-        assert config.artifact_storage_path == "/tmp/ampersand-artifacts"
+        assert config.artifact_storage_path == TEST_ARTIFACT_STORAGE_PATH
         assert config.nucleus_internal_url == "http://nucleus-internal.test"
         assert config.nucleus_result_token == "internal-secret"
         assert config.log_level == "INFO"
@@ -85,7 +89,20 @@ class TestConfigLoading:
         assert (
             config.claim_timeout_seconds == DEFAULT_CLAIM_TIMEOUT_SECONDS
         )
-        assert config.artifact_storage_path == DEFAULT_ARTIFACT_STORAGE_PATH
+        repository_root = Path(__file__).resolve().parents[3]
+        assert config.artifact_storage_path == str(
+            (repository_root / DEFAULT_ARTIFACT_STORAGE_PATH).resolve()
+        )
+
+    def test_relative_artifact_path_is_resolved_from_repository_root(self):
+        config = WorkerConfig.from_env(
+            base_env(ARTIFACT_STORAGE_PATH="./shared-artifacts")
+        )
+
+        repository_root = Path(__file__).resolve().parents[3]
+        assert config.artifact_storage_path == str(
+            (repository_root / "shared-artifacts").resolve()
+        )
         assert config.log_level == "INFO"
         assert config.max_snapshot_bytes == DEFAULT_MAX_SNAPSHOT_BYTES
         assert config.max_snapshot_rows == DEFAULT_MAX_SNAPSHOT_ROWS
@@ -192,8 +209,6 @@ class TestConfigErrors:
         with pytest.raises(InvalidEnvironmentValueError) as excinfo:
             WorkerConfig.from_env(base_env(WORKER_LOG_LEVEL="verbose"))
         assert excinfo.value.variable == "WORKER_LOG_LEVEL"
-
-
 class TestWorkerLogConfig:
     def test_worker_log_max_chars_default(self):
         config = WorkerConfig.from_env(base_env())

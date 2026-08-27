@@ -1,4 +1,7 @@
 import { afterAll, describe, expect, test } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import pg from "pg";
 
 import { FormatRegistry } from "@sinclair/typebox";
@@ -6,6 +9,9 @@ import { Value } from "@sinclair/typebox/value";
 import { DatasetDefinitionResponseDto } from "@ampersand/contracts";
 
 import { createDatasetDefinition } from "./service";
+import { createDatasetSnapshot } from "./snapshot-service";
+import { createSnapshotStorage } from "./storage";
+import { tenantDataSchemaName } from "./tenant-data-schema";
 
 const { Pool } = pg;
 const databaseUrl = process.env.DATABASE_URL;
@@ -16,6 +22,7 @@ if (!databaseUrl) {
 
 const datasetIntegrationPool = new Pool({ connectionString: databaseUrl });
 const schemaName = "tenant_ampersand_dev";
+const dataSchemaName = tenantDataSchemaName(schemaName);
 const userId = "22222222-2222-4222-8222-222222222222";
 
 FormatRegistry.Set("uuid", (value) =>
@@ -51,9 +58,10 @@ describe("dataset definition database integration", () => {
     try {
       await client.query("BEGIN");
       await client.query(`SET LOCAL search_path TO ${schemaName}`);
+      await client.query(`CREATE SCHEMA IF NOT EXISTS ${dataSchemaName}`);
 
       await client.query(`
-        CREATE TABLE energy_readings (
+        CREATE TABLE ${dataSchemaName}.energy_readings (
           id bigserial PRIMARY KEY,
           recorded_at timestamptz NOT NULL,
           temperature double precision NOT NULL,
@@ -165,8 +173,9 @@ describe("dataset definition database integration", () => {
     try {
       await client.query("BEGIN");
       await client.query(`SET LOCAL search_path TO ${schemaName}`);
+      await client.query(`CREATE SCHEMA IF NOT EXISTS ${dataSchemaName}`);
       await client.query(`
-        CREATE VIEW energy_readings_view AS
+        CREATE VIEW ${dataSchemaName}.energy_readings_view AS
         SELECT 1::double precision AS temperature,
                2::numeric AS energy_usage
       `);
@@ -192,6 +201,72 @@ describe("dataset definition database integration", () => {
     } finally {
       await client.query("ROLLBACK").catch(() => {});
       client.release();
+    }
+  });
+
+  test("reuses identical snapshot content for one dataset definition", async () => {
+    const client = await datasetIntegrationPool.connect();
+    const storageRoot = await mkdtemp(join(tmpdir(), "ampersand-snapshot-reuse-"));
+
+    try {
+      await client.query("BEGIN");
+      await client.query(`SET LOCAL search_path TO ${schemaName}`);
+      await client.query(`CREATE SCHEMA IF NOT EXISTS ${dataSchemaName}`);
+      await client.query(`
+        CREATE TABLE ${dataSchemaName}.snapshot_reuse_readings (
+          temperature double precision NOT NULL,
+          energy_usage double precision NOT NULL
+        )
+      `);
+      await client.query(`
+        INSERT INTO ${dataSchemaName}.snapshot_reuse_readings
+          (temperature, energy_usage)
+        VALUES (20, 100), (25, 130)
+      `);
+
+      const definition = await createDatasetDefinition(
+        client,
+        schemaName,
+        userId,
+        {
+          name: "Snapshot reuse integration",
+          sourceTable: "snapshot_reuse_readings",
+          features: [{ name: "temperature", description: "Temperature" }],
+          target: { name: "energy_usage", description: "Energy" },
+        },
+      );
+      if (!definition.ok) throw new Error("expected successful definition");
+
+      const storage = createSnapshotStorage(storageRoot);
+      const first = await createDatasetSnapshot(
+        client,
+        schemaName,
+        definition.body.id,
+        storage,
+      );
+      const second = await createDatasetSnapshot(
+        client,
+        schemaName,
+        definition.body.id,
+        storage,
+      );
+
+      expect(first.ok).toBe(true);
+      expect(second.ok).toBe(true);
+      if (!first.ok || !second.ok) return;
+      expect(second.body.id).toBe(first.body.id);
+
+      const stored = await client.query<{ count: string }>(
+        `SELECT count(*)::text AS count
+         FROM dataset_snapshots
+         WHERE dataset_definition_id = $1`,
+        [definition.body.id],
+      );
+      expect(stored.rows[0]?.count).toBe("1");
+    } finally {
+      await client.query("ROLLBACK").catch(() => {});
+      client.release();
+      await rm(storageRoot, { recursive: true, force: true });
     }
   });
 });

@@ -11,6 +11,7 @@ import os
 import re
 import socket
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Mapping
 from urllib.parse import urlparse
 
@@ -29,6 +30,8 @@ DEFAULT_SUBMISSION_TIMEOUT_SECONDS = 10
 DEFAULT_SUBMISSION_MAX_ATTEMPTS = 3
 DEFAULT_WORKER_LOG_MAX_CHARS = 8192
 DEFAULT_LOG_LEVEL = "INFO"
+
+_REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 
 VALID_LOG_LEVELS = ("CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG")
 
@@ -74,10 +77,12 @@ class WorkerConfig:
             "WORKER_CLAIM_TIMEOUT_SECONDS",
             DEFAULT_CLAIM_TIMEOUT_SECONDS,
         )
-        artifact_storage_path = _require_non_empty(
-            values,
-            "ARTIFACT_STORAGE_PATH",
-            default=DEFAULT_ARTIFACT_STORAGE_PATH,
+        artifact_storage_path = _artifact_storage_path(
+            _require_non_empty(
+                values,
+                "ARTIFACT_STORAGE_PATH",
+                default=DEFAULT_ARTIFACT_STORAGE_PATH,
+            )
         )
         max_snapshot_bytes = _positive_int(
             values,
@@ -151,6 +156,13 @@ def _nucleus_internal_url(env: Mapping[str, str]) -> str:
         )
 
     return raw.rstrip("/")
+
+
+def _artifact_storage_path(raw: str) -> str:
+    path = Path(raw)
+    if not path.is_absolute():
+        path = _REPOSITORY_ROOT / path
+    return str(path.resolve())
 
 
 def _resolve_worker_id(env: Mapping[str, str]) -> str:

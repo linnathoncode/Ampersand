@@ -1,5 +1,17 @@
+import { createHash } from "node:crypto";
+
 import { databasePool } from "../database/pool";
 import type { AuthContext } from "./context";
+
+const AUTH_CACHE_TTL_MS = 5_000;
+const AUTH_CACHE_MAX_ENTRIES = 500;
+
+type CachedAuth = {
+  expiresAt: number;
+  value: Promise<AuthContext | null>;
+};
+
+const authCache = new Map<string, CachedAuth>();
 
 type NucleusMeResponse = {
   success?: boolean;
@@ -20,6 +32,43 @@ export async function resolveNucleusAuth(
   const cookie = request.headers.get("cookie");
 
   if (!tenantId || !cookie) return null;
+
+  const cacheKey = createAuthCacheKey(
+    tenantId,
+    cookie,
+    request.headers.get("x-service-id") ?? "",
+  );
+  const now = Date.now();
+  const cached = authCache.get(cacheKey);
+
+  if (cached && cached.expiresAt > now) {
+    return cached.value;
+  }
+
+  if (cached) authCache.delete(cacheKey);
+  pruneAuthCache(now);
+
+  const value = resolveUncachedNucleusAuth(request, tenantId, cookie);
+  authCache.set(cacheKey, {
+    expiresAt: now + AUTH_CACHE_TTL_MS,
+    value,
+  });
+
+  try {
+    const auth = await value;
+    if (!auth) authCache.delete(cacheKey);
+    return auth;
+  } catch (error) {
+    authCache.delete(cacheKey);
+    throw error;
+  }
+}
+
+async function resolveUncachedNucleusAuth(
+  request: Request,
+  tenantId: string,
+  cookie: string,
+): Promise<AuthContext | null> {
 
   const response = await fetch(new URL("/auth/me", request.url), {
     headers: {
@@ -57,6 +106,28 @@ export async function resolveNucleusAuth(
     claims,
     authType: "nucleus-session",
   };
+}
+
+function createAuthCacheKey(
+  tenantId: string,
+  cookie: string,
+  serviceId: string,
+): string {
+  return createHash("sha256")
+    .update(`${tenantId}\0${serviceId}\0${cookie}`)
+    .digest("hex");
+}
+
+function pruneAuthCache(now: number): void {
+  for (const [key, entry] of authCache) {
+    if (entry.expiresAt <= now) authCache.delete(key);
+  }
+
+  while (authCache.size >= AUTH_CACHE_MAX_ENTRIES) {
+    const oldestKey = authCache.keys().next().value;
+    if (oldestKey === undefined) break;
+    authCache.delete(oldestKey);
+  }
 }
 
 async function resolveUserClaims(
