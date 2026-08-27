@@ -1,5 +1,5 @@
 import { relations } from 'drizzle-orm';
-import { users, profiles, roles, claims, userRoles, roleClaims, addresses, phones, tenants, tenantEvents, tenantFeatures, userCohorts, userSessions, trustedDevices, passwordResetTokens, magicLinkTokens, webauthnCredentials, webauthnChallenges, oauthAccounts, apiKeys, datasetDefinitions, datasetColumns, datasetSnapshots, trainingJobs, modelVersions, modelArtifacts, modelFeatures, toolDefinitions, inferenceCalls } from './schema';
+import { users, profiles, roles, claims, userRoles, roleClaims, addresses, phones, tenants, tenantEvents, tenantFeatures, userCohorts, userSessions, trustedDevices, passwordResetTokens, magicLinkTokens, webauthnCredentials, webauthnChallenges, oauthAccounts, apiKeys, datasetDefinitions, datasetColumns, datasetSnapshots, trainingJobs, modelVersions, modelArtifacts, modelFeatures, toolDefinitions, inferenceCalls, userLlmSettings } from './schema';
 
 export const usersRelations = relations(users, ({ one, many }) => ({
 	userCohorts: one(userCohorts, {
@@ -183,6 +183,13 @@ export const inferenceCallsRelations = relations(inferenceCalls, ({ one, many })
 	modelVersions: one(modelVersions, {
 		fields: [inferenceCalls.modelVersionId],
 		references: [modelVersions.id],
+	}),
+}));
+
+export const userLlmSettingsRelations = relations(userLlmSettings, ({ one, many }) => ({
+	users: one(users, {
+		fields: [userLlmSettings.userId],
+		references: [users.id],
 	}),
 }));
 

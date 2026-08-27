@@ -4,6 +4,7 @@ export const nucleusUrl =
 export const serviceId = "ampersand-web";
 export const tenantStorageKey = "ampersand:tenant";
 const authenticatedUserStorageKey = "ampersand:authenticated-user";
+const legacyLlmSettingsStoragePrefix = "ampersand:llm-settings";
 export const authenticatedUserChangedEvent =
   "ampersand:authenticated-user-changed";
 const chatCachePrefixes = [
@@ -49,9 +50,42 @@ export function getAuthenticatedUserId(): string | null {
   return window.sessionStorage.getItem(authenticatedUserStorageKey);
 }
 
+export type LlmSettings =
+  | {
+      mode: "local";
+      model: string;
+      baseUrl: string;
+    }
+  | {
+      mode: "remote";
+      apiFormat: "openai-compatible" | "anthropic";
+      model: string;
+      baseUrl: string;
+      apiKey: string;
+      reasoningEffort: ReasoningEffort | "";
+    };
+
+export type ReasoningEffort =
+  | "none"
+  | "minimal"
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh"
+  | "max";
+
 export function clearAuthenticatedSession(): void {
   clearChatSessionCache();
   window.sessionStorage.removeItem(authenticatedUserStorageKey);
+}
+
+export function clearLegacyLlmSettings(): void {
+  for (let index = window.localStorage.length - 1; index >= 0; index -= 1) {
+    const key = window.localStorage.key(index);
+    if (key?.startsWith(legacyLlmSettingsStoragePrefix)) {
+      window.localStorage.removeItem(key);
+    }
+  }
 }
 
 export async function fetchWithAuthRedirect(

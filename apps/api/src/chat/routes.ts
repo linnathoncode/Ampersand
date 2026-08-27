@@ -1,4 +1,5 @@
 import { createOpenAI } from "@ai-sdk/openai";
+import { createAnthropic } from "@ai-sdk/anthropic";
 import { Type } from "@sinclair/typebox";
 import {
   convertToModelMessages,
@@ -24,6 +25,7 @@ import {
 import { resolveNucleusAuth } from "../auth/resolve-nucleus-auth";
 import { withTenantTransaction } from "../database/tenant-transaction";
 import { listSourceTables } from "../dataset/source-table-service";
+import { loadUserLlmConfig, type UserLlmConfig } from "../llm-settings/service";
 import { predictionRoutes } from "../prediction/routes";
 import { getDiscoverableTools } from "../tool-definitions/service";
 import { checkLlmAvailability } from "./llm-availability";
@@ -39,12 +41,28 @@ const ChatRequestDto = Type.Object(
 
 const CHAT_INSTRUCTIONS = `You are the Ampersand assistant. Available tools are supplied with each conversation.
 Call list_source_tables when the user asks about datasets, tables, uploaded data, or data available for training. Call it immediately instead of describing it or asking which dataset they mean.
+Call list_prediction_tools when the user asks which models or prediction tools are available. Do not call list_source_tables for that request.
+Training and prediction are different tasks. Use start_model_training only when the user explicitly asks to train, create, build, or fit a model. A request to predict, estimate, forecast, or use an existing model must never call start_model_training. For those requests, select the matching published prediction tool and collect only its actual input values.
 For training, gather a model name, source table, feature columns, and one numeric target. Never invent columns or infer correlation from column names. Show a short summary and ask for confirmation. Call start_model_training only after the user confirms.
 Confirmation is required exactly once. When start_model_training returns a queued outcome, tell the user that the job is queued and stop. Do not ask them to confirm, proceed, or start training again.
-Training and prediction are separate. Never send table names, column names, a target, or a feature list to a prediction tool. Prediction tools accept actual values for one observation and should only be called when the user asks for a prediction.
+Never send table names, column names, a target, or a feature list to a prediction tool. Prediction tools accept actual values for one observation and should only be called when the user asks for a prediction.
 Report actual tool results and explain rejections without inventing results. Respond normally when no tool is relevant.`;
 
-export const chatRoutes = new Elysia()
+type ChatRouteDependencies = {
+  loadLlmConfig(schemaName: string, userId: string): Promise<UserLlmConfig | null>;
+};
+
+const defaultChatRouteDependencies: ChatRouteDependencies = {
+  loadLlmConfig: (schemaName, userId) =>
+    withTenantTransaction(schemaName, (client) => loadUserLlmConfig(client, userId)),
+};
+
+export function createChatRoutes(
+  overrides: Partial<ChatRouteDependencies> = {},
+) {
+  const dependencies = { ...defaultChatRouteDependencies, ...overrides };
+
+  return new Elysia()
   .get("/chat/status", async ({ request, set }) => {
     const auth =
       getAuthContext(request.headers) ?? (await resolveNucleusAuth(request));
@@ -59,7 +77,10 @@ export const chatRoutes = new Elysia()
       };
     }
 
-    return checkLlmAvailability();
+    const userLlm = await dependencies.loadLlmConfig(auth.schemaName, auth.userId);
+    return userLlm
+      ? { available: true as const, model: userLlm.model }
+      : checkLlmAvailability();
   })
   .post(
     "/chat",
@@ -87,7 +108,8 @@ export const chatRoutes = new Elysia()
         };
       }
 
-      const availability = await checkLlmAvailability();
+      const userLlm = await dependencies.loadLlmConfig(auth.schemaName, auth.userId);
+      const availability = userLlm ? { available: true as const, model: userLlm.model } : await checkLlmAvailability();
       if (!availability.available) {
         set.status = 503;
         return {
@@ -97,8 +119,6 @@ export const chatRoutes = new Elysia()
           },
         };
       }
-
-      const apiKey = process.env.LLM_API_KEY!;
 
       const messages = body.messages as UIMessage[];
 
@@ -114,21 +134,20 @@ export const chatRoutes = new Elysia()
         conversationHasQueuedTraining(messages),
       );
       const availableTools = Object.keys(tools).length > 0 ? tools : undefined;
-      const provider = createOpenAI({
-        apiKey,
-        baseURL: process.env.LLM_BASE_URL || undefined,
-      });
+      const model = createConversationModel(userLlm);
+      const reasoningEffort = userLlm?.mode === "remote" &&
+        userLlm.apiFormat === "openai-compatible"
+        ? userLlm.reasoningEffort
+        : null;
       const result = streamText({
-        model: provider.chat(process.env.LLM_MODEL ?? "gpt-4.1-mini"),
+        model,
         instructions: CHAT_INSTRUCTIONS,
         messages: await convertToModelMessages(messages),
         tools: availableTools,
         stopWhen: stepCountIs(5),
-        providerOptions: {
-          openai: {
-            reasoningEffort: "none",
-          },
-        },
+        providerOptions: reasoningEffort
+          ? { openai: { reasoningEffort } }
+          : undefined,
       });
 
       const stream = toUIMessageStream({ stream: result.stream }).pipeThrough(
@@ -139,6 +158,9 @@ export const chatRoutes = new Elysia()
     },
     { body: ChatRequestDto },
   );
+}
+
+export const chatRoutes = createChatRoutes();
 
 export function createConversationTools(
   definitions: Awaited<ReturnType<typeof getDiscoverableTools>>,
@@ -152,7 +174,7 @@ export function createConversationTools(
     definitions.map((definition) => [
           definition.toolName,
           dynamicTool({
-            description: definition.description,
+            description: `Prediction only. Use this published model tool when the user asks to predict or estimate using it. Do not use it to train a model. ${definition.description}`,
             inputSchema: jsonSchema(definition.inputSchema),
             execute: async (inputs) => {
               const internalHeaders = new Headers();
@@ -182,6 +204,22 @@ export function createConversationTools(
 
   const tools: ToolSet = {
     ...predictionTools,
+    list_prediction_tools: dynamicTool({
+      description:
+        "List the published prediction tools available in the current tenant. Use this for questions about available models or prediction tools, not for training tables.",
+      inputSchema: jsonSchema({
+        type: "object",
+        properties: {},
+        additionalProperties: false,
+      }),
+      execute: async () =>
+        definitions.map((definition) => ({
+          toolName: definition.toolName,
+          modelVersionId: definition.modelVersionId,
+          description: definition.description,
+          inputs: Object.keys(definition.inputSchema.properties),
+        })),
+    }),
     list_source_tables: dynamicTool({
       description:
         "List source tables available in the current tenant for model training, including row counts, columns, and detected data types.",
@@ -251,6 +289,34 @@ export function createConversationTools(
   }
 
   return tools;
+}
+
+function createConversationModel(config: UserLlmConfig | null) {
+  if (!config) {
+    return createOpenAI({
+      apiKey: process.env.LLM_API_KEY!,
+      baseURL: process.env.LLM_BASE_URL || undefined,
+    }).chat(process.env.LLM_MODEL ?? "gpt-4.1-mini");
+  }
+
+  if (config.mode === "remote" && config.apiFormat === "anthropic") {
+    return createAnthropic({
+      apiKey: config.apiKey,
+      baseURL: config.baseUrl,
+    }).chat(config.model);
+  }
+
+  if (config.mode === "remote") {
+    return createOpenAI({
+      apiKey: config.apiKey,
+      baseURL: config.baseUrl,
+    }).responses(config.model);
+  }
+
+  return createOpenAI({
+    apiKey: "local",
+    baseURL: config.baseUrl,
+  }).chat(config.model);
 }
 
 type StartModelTrainingInput = Parameters<typeof startModelTraining>[1];

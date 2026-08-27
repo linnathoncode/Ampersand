@@ -984,6 +984,54 @@
           }
         ]
       }
+    },
+    {
+      "table_name": "user_llm_settings",
+      "add_base_columns": true,
+      "columns": [
+        {
+          "name": "user_id",
+          "type": "uuid",
+          "notNull": true,
+          "unique": true,
+          "references": {
+            "table": "users",
+            "column": "id",
+            "onDelete": "cascade"
+          }
+        },
+        {
+          "name": "mode",
+          "type": "varchar",
+          "length": 20,
+          "notNull": true
+        },
+        {
+          "name": "api_format",
+          "type": "varchar",
+          "length": 30
+        },
+        {
+          "name": "model_name",
+          "type": "varchar",
+          "length": 200,
+          "notNull": true
+        },
+        {
+          "name": "base_url",
+          "type": "text",
+          "notNull": true
+        },
+        {
+          "name": "encrypted_api_key",
+          "type": "text"
+        },
+        {
+          "name": "reasoning_effort",
+          "type": "varchar",
+          "length": 20
+        }
+      ]
     }
   ]
 }

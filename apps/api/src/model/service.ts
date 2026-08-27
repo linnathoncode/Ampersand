@@ -8,6 +8,8 @@ import type {
 
 import type { PoolClient } from "pg";
 
+import { generateAndStoreModelToolDefinition } from "../tool-definitions/service";
+
 import {
   findModelVersionStatus,
   listModelVersions,
@@ -56,6 +58,19 @@ export async function publishCandidateModel(
   );
 
   if (publishedModel) {
+    const toolResult = await generateAndStoreModelToolDefinition(
+      client,
+      schemaName,
+      modelVersionId,
+      publishedBy,
+    );
+
+    if (!toolResult.ok) {
+      throw new Error(
+        `Publication could not create the model tool: ${toolResult.body.error.message}`,
+      );
+    }
+
     return {
       ok: true,
       body: publishedModel,

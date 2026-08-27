@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   chatRoutes,
+  createChatRoutes,
   conversationHasQueuedTraining,
   createConversationTools,
   latestUserConfirmedTraining,
@@ -27,7 +28,7 @@ describe("chat routes", () => {
       claims: ["invoke.tool_definitions"],
     });
 
-    expect(Object.keys(tools)).toEqual(["list_source_tables"]);
+    expect(Object.keys(tools)).toEqual(["list_prediction_tools", "list_source_tables"]);
   });
 
   it("exposes training submission to users with both claims", () => {
@@ -107,7 +108,7 @@ describe("chat routes", () => {
   });
 
   it("requires prediction tool invocation permission", async () => {
-    const response = await chatRoutes.handle(
+    const response = await createChatRoutes({ loadLlmConfig: async () => null }).handle(
       createRequest({
         "x-user-id": "63ed43b7-2f78-4fb1-a68e-6141a8eaa53f",
         "x-tenant-schema": "tenant_ampersand_dev",
@@ -121,7 +122,7 @@ describe("chat routes", () => {
   it("reports a missing conversation model configuration", async () => {
     delete process.env.LLM_API_KEY;
 
-    const response = await chatRoutes.handle(
+    const response = await createChatRoutes({ loadLlmConfig: async () => null }).handle(
       createRequest({
         "x-user-id": "63ed43b7-2f78-4fb1-a68e-6141a8eaa53f",
         "x-tenant-schema": "tenant_ampersand_dev",

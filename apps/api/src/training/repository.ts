@@ -12,6 +12,7 @@ export type LoadedTrainingSnapshot = {
 
 export type LoadedTrainingJobProgress = {
   id: string;
+  modelVersionId: string | null;
   status: "queued" | "running" | "succeeded" | "failed" | "cancelled" | "dead";
   progressPercent: number;
   progressMessage: string | null;
@@ -25,15 +26,18 @@ export async function loadTrainingJobProgress(
 ): Promise<LoadedTrainingJobProgress | null> {
   const result = await pool.query<{
     id: string;
+    model_version_id: string | null;
     status: LoadedTrainingJobProgress["status"];
     progress_percent: number;
     progress_message: string | null;
     error_code: string | null;
     error_message: string | null;
   }>(
-    `SELECT id, status, progress_percent, progress_message, error_code, error_message
-     FROM training_jobs
-     WHERE id = $1 AND is_active = true`,
+    `SELECT tj.id, tj.status, tj.progress_percent, tj.progress_message,
+            tj.error_code, tj.error_message, mv.id AS model_version_id
+     FROM training_jobs tj
+     LEFT JOIN model_versions mv ON mv.training_job_id = tj.id AND mv.is_active = true
+     WHERE tj.id = $1 AND tj.is_active = true`,
     [jobId],
   );
   const row = result.rows[0];
@@ -41,6 +45,7 @@ export async function loadTrainingJobProgress(
 
   return {
     id: row.id,
+    modelVersionId: row.model_version_id,
     status: row.status,
     progressPercent: row.progress_percent,
     progressMessage: row.progress_message,

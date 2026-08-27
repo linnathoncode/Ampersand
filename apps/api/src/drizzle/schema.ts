@@ -1099,6 +1099,32 @@ export function createInferenceCallsForSchema(schema: ReturnType<typeof pgSchema
 	});
 }
 
+export const userLlmSettingsColumns = {
+	id: uuid('id').primaryKey().default(sql`gen_random_uuid()`),
+	createdAt: timestamp('created_at', { withTimezone: true }).notNull().default(sql`now()`),
+	updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().default(sql`now()`),
+	isActive: boolean('is_active').notNull().default(true),
+	createdBy: uuid('created_by'),
+	updatedBy: uuid('updated_by'),
+	userId: uuid('user_id').notNull().unique().references(() => users.id, { onDelete: 'cascade' }),
+	mode: varchar('mode', { length: 20 }).notNull(),
+	apiFormat: varchar('api_format', { length: 30 }),
+	modelName: varchar('model_name', { length: 200 }).notNull(),
+	baseUrl: text('base_url').notNull(),
+	encryptedApiKey: text('encrypted_api_key'),
+	reasoningEffort: varchar('reasoning_effort', { length: 20 }),
+};
+
+export const userLlmSettings = pgTable('user_llm_settings', userLlmSettingsColumns);
+
+export function createUserLlmSettingsForSchema(schema: ReturnType<typeof pgSchema>) {
+	const usersTable = schema.table('users', usersColumns, (t) => usersIndexes(t));
+	return schema.table('user_llm_settings', {
+		...userLlmSettingsColumns,
+		userId: uuid('user_id').notNull().references(() => usersTable.id, { onDelete: 'cascade' }),
+	});
+}
+
 export function createAllTablesForSchema(schema: ReturnType<typeof pgSchema>) {
 	const tables: Record<string, unknown> = {};
 
@@ -1131,6 +1157,7 @@ export function createAllTablesForSchema(schema: ReturnType<typeof pgSchema>) {
 	tables.modelFeatures = createModelFeaturesForSchema(schema);
 	tables.toolDefinitions = createToolDefinitionsForSchema(schema);
 	tables.inferenceCalls = createInferenceCallsForSchema(schema);
+	tables.userLlmSettings = createUserLlmSettingsForSchema(schema);
 
 	return tables;
 }

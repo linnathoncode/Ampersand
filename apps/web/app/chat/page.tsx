@@ -21,6 +21,7 @@ const terminalTrainingStatuses = new Set(["succeeded", "failed", "cancelled", "d
 
 type TrainingProgress = {
   id: string;
+  modelVersionId: string | null;
   status: "queued" | "running" | "succeeded" | "failed" | "cancelled" | "dead";
   progressPercent: number;
   progressMessage: string | null;
@@ -55,10 +56,14 @@ export default function ChatPage() {
   >({ state: "checking" });
   const [messageTimestamps, setMessageTimestamps] = useState<Record<string, string>>({});
   const [trainingProgress, setTrainingProgress] = useState<TrainingProgress | null>(null);
+  const [replacementTrainingJob, setReplacementTrainingJob] = useState<ReturnType<typeof findLatestQueuedTrainingJob>>(null);
+  const [trainingAction, setTrainingAction] = useState<"publishing" | "retrying" | null>(null);
+  const [trainingActionMessage, setTrainingActionMessage] = useState<string | null>(null);
   const composerInputRef = useRef<HTMLTextAreaElement>(null);
   const threadRef = useRef<HTMLDivElement>(null);
   const isBusy = status === "submitted" || status === "streaming";
   const trainingJob = useMemo(() => findLatestQueuedTrainingJob(messages), [messages]);
+  const currentTrainingJob = replacementTrainingJob ?? trainingJob;
   const trainingIsActive =
     trainingProgress?.status === "queued" || trainingProgress?.status === "running";
   const activeToolName = findActiveToolName(messages);
@@ -169,14 +174,14 @@ export default function ChatPage() {
   }, [messages, status]);
 
   useEffect(() => {
-    if (!trainingJob || !tenant) return;
+    if (!currentTrainingJob || !tenant) return;
 
     let cancelled = false;
     let timer: number | undefined;
 
     const loadProgress = async () => {
       const response = await fetchWithAuthRedirect(
-        `${nucleusUrl}/training-jobs/${trainingJob.id}`,
+        `${nucleusUrl}/training-jobs/${currentTrainingJob.id}`,
         {
           credentials: "include",
           headers: createTenantHeaders(tenant),
@@ -195,10 +200,11 @@ export default function ChatPage() {
     };
 
     setTrainingProgress({
-      id: trainingJob.id,
-      status: trainingJob.status,
-      progressPercent: trainingJob.progressPercent,
-      progressMessage: trainingJob.progressMessage,
+      id: currentTrainingJob.id,
+      modelVersionId: null,
+      status: currentTrainingJob.status,
+      progressPercent: currentTrainingJob.progressPercent,
+      progressMessage: currentTrainingJob.progressMessage,
       errorCode: null,
       errorMessage: null,
     });
@@ -216,12 +222,66 @@ export default function ChatPage() {
       cancelled = true;
       if (timer !== undefined) window.clearTimeout(timer);
     };
-  }, [tenant, trainingJob]);
+  }, [currentTrainingJob, tenant]);
+
+  async function publishTrainingModel(modelVersionId: string) {
+    if (!tenant) return;
+
+    setTrainingAction("publishing");
+    setTrainingActionMessage(null);
+    try {
+      const response = await fetchWithAuthRedirect(
+        `${nucleusUrl}/model-versions/${modelVersionId}/publish`,
+        {
+          method: "POST",
+          credentials: "include",
+          headers: createTenantHeaders(tenant),
+        },
+      );
+      if (!response.ok) throw new Error(await readActionError(response, "Model publication failed"));
+      setTrainingActionMessage("Model published and available for tool discovery.");
+    } catch (reason) {
+      setTrainingActionMessage(reason instanceof Error ? reason.message : "Model publication failed");
+    } finally {
+      setTrainingAction(null);
+    }
+  }
+
+  async function retryTrainingJob() {
+    if (!tenant || !currentTrainingJob?.datasetDefinitionId) return;
+
+    setTrainingAction("retrying");
+    setTrainingActionMessage(null);
+    try {
+      const response = await fetchWithAuthRedirect(`${nucleusUrl}/training-jobs`, {
+        method: "POST",
+        credentials: "include",
+        headers: { ...createTenantHeaders(tenant), "Content-Type": "application/json" },
+        body: JSON.stringify({ datasetDefinitionId: currentTrainingJob.datasetDefinitionId }),
+      });
+      if (!response.ok) throw new Error(await readActionError(response, "Training retry failed"));
+      const result = (await response.json()) as { outcome?: string; job?: TrainingProgress };
+      if (result.outcome !== "queued" || !result.job) throw new Error("Training retry returned an invalid response");
+      setReplacementTrainingJob({
+        ...result.job,
+        datasetDefinitionId: currentTrainingJob.datasetDefinitionId,
+      });
+      setTrainingProgress({ ...result.job, modelVersionId: null, errorCode: null, errorMessage: null });
+      setTrainingActionMessage("Training was queued again.");
+    } catch (reason) {
+      setTrainingActionMessage(reason instanceof Error ? reason.message : "Training retry failed");
+    } finally {
+      setTrainingAction(null);
+    }
+  }
 
   return (
     <AppShell activeSection="chat" activeTab="selection" breadcrumb="Conversation">
       <section className="conversation" aria-label="Prediction conversation">
         <div className="conversation-toolbar">
+          <span className="conversation-model">
+            {llmStatus.state === "available" ? llmStatus.model : ""}
+          </span>
           <button
             disabled={trainingIsActive}
             onClick={async () => {
@@ -330,6 +390,27 @@ export default function ChatPage() {
               </div>
               <progress max={100} value={trainingProgress.progressPercent} />
               <p>{trainingProgress.errorMessage ?? trainingProgress.progressMessage}</p>
+              {trainingProgress.status === "succeeded" && trainingProgress.modelVersionId && (
+                <button
+                  className="training-action-button"
+                  disabled={trainingAction !== null}
+                  onClick={() => void publishTrainingModel(trainingProgress.modelVersionId!)}
+                  type="button"
+                >
+                  {trainingAction === "publishing" ? "Publishing..." : "Publish model"}
+                </button>
+              )}
+              {(trainingProgress.status === "failed" || trainingProgress.status === "dead") && (
+                <button
+                  className="training-action-button"
+                  disabled={trainingAction !== null}
+                  onClick={() => void retryTrainingJob()}
+                  type="button"
+                >
+                  {trainingAction === "retrying" ? "Retrying..." : "Retry training"}
+                </button>
+              )}
+              {trainingActionMessage && <p className="training-action-message">{trainingActionMessage}</p>}
             </div>
           )}
         </div>
@@ -582,6 +663,7 @@ function findActiveToolName(messages: UIMessage[]): string | null {
 
 function findLatestQueuedTrainingJob(messages: UIMessage[]): {
   id: string;
+  datasetDefinitionId: string;
   status: TrainingProgress["status"];
   progressPercent: number;
   progressMessage: string | null;
@@ -597,7 +679,10 @@ function findLatestQueuedTrainingJob(messages: UIMessage[]): {
         continue;
       }
 
-      return part.output.job;
+      return {
+        ...part.output.job,
+        datasetDefinitionId: part.output.dataset.id,
+      };
     }
   }
 
@@ -606,6 +691,7 @@ function findLatestQueuedTrainingJob(messages: UIMessage[]): {
 
 function isQueuedTrainingOutput(value: unknown): value is {
   outcome: "queued";
+  dataset: { id: string };
   job: {
     id: string;
     status: TrainingProgress["status"];
@@ -613,12 +699,18 @@ function isQueuedTrainingOutput(value: unknown): value is {
     progressMessage: string | null;
   };
 } {
-  if (!isPlainObject(value) || value.outcome !== "queued" || !isPlainObject(value.job)) {
+  if (
+    !isPlainObject(value) ||
+    value.outcome !== "queued" ||
+    !isPlainObject(value.dataset) ||
+    !isPlainObject(value.job)
+  ) {
     return false;
   }
 
   return (
     typeof value.job.id === "string" &&
+    typeof value.dataset.id === "string" &&
     typeof value.job.status === "string" &&
     typeof value.job.progressPercent === "number" &&
     (typeof value.job.progressMessage === "string" || value.job.progressMessage === null)
@@ -686,6 +778,15 @@ function formatChatError(error: Error): string {
     return parsed.error?.message ?? "The conversation could not continue.";
   } catch {
     return error.message || "The conversation could not continue.";
+  }
+}
+
+async function readActionError(response: Response, fallback: string): Promise<string> {
+  try {
+    const body = (await response.json()) as { error?: { message?: string }; message?: string };
+    return body.error?.message ?? body.message ?? fallback;
+  } catch {
+    return fallback;
   }
 }
 

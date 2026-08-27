@@ -6,6 +6,7 @@ import { chatRoutes } from "./chat/routes";
 import { datasetRoutes } from "./dataset/routes";
 import { sourceTableRoutes } from "./dataset/source-table-routes";
 import { internalRoutes } from "./internal/routes";
+import { llmSettingsRoutes } from "./llm-settings/routes";
 import { modelRoutes } from "./model/routes";
 import { predictionRoutes } from "./prediction/routes";
 import { toolDefinitionRoutes } from "./tool-definitions/routes";
@@ -30,6 +31,7 @@ export async function createApp() {
     .use(nucleus)
     .use(modelRoutes)
     .use(chatRoutes)
+    .use(llmSettingsRoutes)
     .use(datasetRoutes)
     .use(sourceTableRoutes)
     .use(toolDefinitionRoutes)

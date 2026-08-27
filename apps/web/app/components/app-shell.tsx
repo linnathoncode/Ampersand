@@ -5,6 +5,7 @@ import type { ReactNode } from "react";
 
 import {
   clearAuthenticatedSession,
+  clearLegacyLlmSettings,
   createTenantHeaders,
   fetchWithAuthRedirect,
   getSelectedTenant,
@@ -14,7 +15,7 @@ import {
 
 type AppShellProps = {
   activeTab: "selection" | "controls";
-  activeSection?: "chat" | "datasets" | "models" | "team" | "tools";
+  activeSection?: "chat" | "datasets" | "models" | "team" | "tools" | "profile";
   breadcrumb: string;
   children: ReactNode;
   controlsHref?: string;
@@ -51,6 +52,7 @@ export function AppShell({ activeTab, activeSection = "models", breadcrumb, chil
   }
 
   useEffect(() => {
+    clearLegacyLlmSettings();
     const selectedTenant = getSelectedTenant();
 
     if (!selectedTenant) {
@@ -158,6 +160,7 @@ export function AppShell({ activeTab, activeSection = "models", breadcrumb, chil
             {isAccountMenuOpen && (
               <div className="account-dropdown" role="menu">
                 <div className="account-dropdown-email">{accountEmail || "Account"}</div>
+                <a href="/profile" role="menuitem">LLM settings</a>
                 <button onClick={() => void signOut()} role="menuitem" type="button">
                   Sign out
                 </button>

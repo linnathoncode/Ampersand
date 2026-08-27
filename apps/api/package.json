@@ -16,6 +16,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@ai-sdk/anthropic": "^4.0.44",
     "@ai-sdk/openai": "^4.0.46",
     "@ampersand/contracts": "workspace:*",
     "@elysiajs/cors": "1.4.2",
