@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 import time
+from datetime import datetime, timezone
 from collections.abc import Callable
 from pathlib import Path
 
@@ -189,6 +190,7 @@ class JobExecutor:
                 SNAPSHOT_VERIFIED_PROGRESS_PERCENT,
                 SNAPSHOT_VERIFIED_PROGRESS_MESSAGE,
             )
+            self._append_log(job, SNAPSHOT_VERIFIED_PROGRESS_MESSAGE)
             self._check_runtime()
 
             trusted_columns = tuple(
@@ -228,6 +230,7 @@ class JobExecutor:
                 SPLIT_PROGRESS_PERCENT,
                 SPLIT_PROGRESS_MESSAGE,
             )
+            self._append_log(job, SPLIT_PROGRESS_MESSAGE)
             self._check_runtime()
 
             output = None
@@ -245,6 +248,9 @@ class JobExecutor:
                     job,
                     TRAINING_PROGRESS_PERCENT,
                     TRAINING_PROGRESS_MESSAGE,
+                )
+                self._append_log(
+                    job, "training finished; submitting result to Nucleus"
                 )
                 outcome = submit_training_result(
                     self._config,
@@ -298,6 +304,22 @@ class JobExecutor:
 
         return _heartbeat
 
+
+    def _append_log(self, job: ClaimedJob, message: str) -> None:
+        """Best-effort bounded log entry; never breaks a phase transition."""
+        try:
+            self._database.append_worker_log(
+                worker_id=self._config.worker_id,
+                schema_name=job.schema_name,
+                job_id=job.id,
+                entry=f"[{datetime.now(timezone.utc).isoformat()}] {message}\n",
+                max_chars=self._config.log_max_chars,
+            )
+        except WorkerError as exc:
+            self._logger.debug(
+                "worker log append for job %s failed: %s", job.id, exc
+            )
+
     def _check_runtime(self) -> None:
         if self._now() - self._runtime_deadline >= 0:
             raise JobRuntimeExceededError(
@@ -337,6 +359,7 @@ class JobExecutor:
         self._last_heartbeat_at = self._now()
 
     def _mark_failed(self, job: ClaimedJob, code: str, message: str) -> None:
+        self._append_log(job, f"failure: {code}: {message}")
         bounded_message = message[: _MAX_ERROR_MESSAGE_LENGTH]
         self._database.transition_job(
             worker_id=self._config.worker_id,

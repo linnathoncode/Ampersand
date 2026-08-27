@@ -5,6 +5,8 @@ import { ResolvedTrainingConfigDto } from "@ampersand/contracts";
 
 export const DEFAULT_MAX_ACTIVE_TRAINING_JOBS = 5;
 
+export const DEFAULT_HEARTBEAT_EXPIRY_SECONDS = 180;
+
 export const QUEUED_TRAINING_JOB_PROGRESS_MESSAGE = "Waiting for a worker";
 
 export function resolveTrainingConfig(): ResolvedTrainingConfig {
@@ -34,6 +36,21 @@ export function resolveMaxActiveTrainingJobs(): number {
   const value = Number(raw);
   if (!Number.isInteger(value) || value < 1) {
     return DEFAULT_MAX_ACTIVE_TRAINING_JOBS;
+  }
+
+  return value;
+}
+
+export function resolveHeartbeatExpirySeconds(): number {
+  const raw = process.env.TRAINING_HEARTBEAT_EXPIRY_SECONDS;
+
+  if (raw === undefined) {
+    return DEFAULT_HEARTBEAT_EXPIRY_SECONDS;
+  }
+
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 1) {
+    return DEFAULT_HEARTBEAT_EXPIRY_SECONDS;
   }
 
   return value;

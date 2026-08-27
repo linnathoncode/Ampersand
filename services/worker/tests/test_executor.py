@@ -63,6 +63,7 @@ class StubDatabase(Database):
         self.context = context
         self.progress = []
         self.transitions = []
+        self.log_entries = []
         self.fail_progress = None
         self.fail_load = None
 
@@ -75,6 +76,9 @@ class StubDatabase(Database):
         if self.fail_progress is not None:
             raise self.fail_progress
         self.progress.append(kwargs)
+
+    def append_worker_log(self, **kwargs):
+        self.log_entries.append(kwargs)
 
     def transition_job(self, **kwargs):
         self.transitions.append(kwargs)
@@ -420,3 +424,50 @@ def test_cancellation_between_split_and_train_aborts_without_submission(
     assert submissions == []
     assert database.transitions == []
     assert list(tmp_path.glob("*.onnx.tmp")) == []
+
+
+def test_worker_log_records_milestones_and_failure_summary(
+    tmp_path, monkeypatch
+):
+    snapshot = make_snapshot_file(tmp_path)
+    database = StubDatabase(valid_context(snapshot))
+    install_submitter(
+        monkeypatch,
+        [
+            TrainingResultSubmissionError(
+                "Nucleus rejected the training result submission",
+                server_error_code="MODEL_FEATURE_METADATA_INVALID",
+            )
+        ],
+    )
+
+    JobExecutor(config(tmp_path), database).handle(claimed_job())
+
+    entries = [item["entry"] for item in database.log_entries]
+    assert any(SNAPSHOT_VERIFIED_PROGRESS_MESSAGE in m for m in entries)
+    assert any("Dataset split and preprocessing completed" in m for m in entries)
+    assert any("training finished; submitting result" in m for m in entries)
+    assert any(
+        "failure: MODEL_FEATURE_METADATA_INVALID" in m for m in entries
+    )
+    assert all(m.endswith("\n") for m in entries)
+    assert all(m.startswith("[") for m in entries)
+    assert all(item["max_chars"] == 8192 for item in database.log_entries)
+
+
+def test_worker_log_append_failure_does_not_break_the_phase(
+    tmp_path, monkeypatch
+):
+    snapshot = make_snapshot_file(tmp_path)
+
+    class LogAppendFailingDatabase(StubDatabase):
+        def append_worker_log(self, **kwargs):
+            raise JobStateConflictError("training job was cancelled")
+
+    database = LogAppendFailingDatabase(valid_context(snapshot))
+    submissions = install_submitter(monkeypatch, [registered_outcome()])
+
+    JobExecutor(config(tmp_path), database).handle(claimed_job())
+
+    assert len(submissions) == 1
+    assert database.transitions == []

@@ -54,11 +54,25 @@ queued training jobs, trains on the frozen snapshot, and submits each
 result to Nucleus over the internal endpoint. It never starts an HTTP
 server and keeps running until it receives `SIGTERM` or `SIGINT`.
 
+The worker appends phase milestones and a failure summary to each job's
+bounded `worker_log` column, keeping the most recent
+`WORKER_LOG_MAX_CHARS` characters (default 8192).
+
 To run the worker test suite:
 
 ```powershell
 python -m pytest services\worker\tests
 ```
+
+## Heartbeat expiry and quotas
+
+Nucleus sweeps running training jobs whose `heartbeat_at` is older than
+`TRAINING_HEARTBEAT_EXPIRY_SECONDS` (default 180) to `dead` with error code
+`HEARTBEAT_EXPIRED`. The sweep runs inside the job-creation flow before the
+tenant quota check, so abandoned jobs free their quota slot immediately.
+Keep this value well above the worker's
+`WORKER_HEARTBEAT_INTERVAL_SECONDS` (default 10) so live workers are never
+swept during long CPU-bound phases.
 
 ## Local Infrastructure
 

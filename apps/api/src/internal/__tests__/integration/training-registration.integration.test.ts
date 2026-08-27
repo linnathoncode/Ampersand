@@ -6,9 +6,13 @@ import { afterAll, describe, expect, test } from "bun:test";
 import pg from "pg";
 
 const { withTenantTransaction } = await import("../../../database/tenant-transaction");
-const { cancelTrainingJobRequest, createTrainingJobRepository } = await import(
-  "../../../training/service"
-);
+const {
+  cancelTrainingJobRequest,
+  createTrainingJob,
+  createTrainingJobRepository,
+} = await import("../../../training/service");
+const { recoverAbandonedTrainingJobs: recoverAbandonedTrainingJobsClient } =
+  await import("../../../training/repository");
 
 process.env.DATABASE_URL ||= "postgresql://ampersand:ampersand@localhost:5432/ampersand";
 
@@ -111,8 +115,11 @@ CREATE TABLE training_jobs (
     finished_at timestamptz,
     error_code varchar(100),
     error_message text,
+    worker_log text,
     max_runtime_seconds integer NOT NULL DEFAULT 600,
     is_active boolean NOT NULL DEFAULT true,
+    created_by uuid,
+    updated_by uuid,
     updated_at timestamptz NOT NULL DEFAULT now()
 );`;
 
@@ -124,7 +131,9 @@ CREATE TABLE dataset_definitions (
     source_table varchar(63) NOT NULL,
     target_column varchar(63) NOT NULL,
     time_column varchar(63),
-    is_active boolean NOT NULL DEFAULT true
+    is_active boolean NOT NULL DEFAULT true,
+    created_by uuid,
+    updated_by uuid
 );
 
 CREATE TABLE dataset_columns (
@@ -145,6 +154,7 @@ CREATE TABLE dataset_snapshots (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     dataset_definition_id uuid NOT NULL REFERENCES dataset_definitions(id)
         ON DELETE CASCADE,
+    is_active boolean NOT NULL DEFAULT true,
     storage_uri text NOT NULL,
     storage_format varchar(16) NOT NULL CHECK (storage_format IN ('parquet')),
     content_sha256 char(64) NOT NULL UNIQUE,
@@ -1049,6 +1059,170 @@ describe("cancel versus registration races", () => {
   );
 });
 
+describe("heartbeat-expiry recovery", () => {
+  const actingUserId = "66666666-6666-4666-8666-666666666666";
+
+  async function seedTrainableDefinition(
+    admin: pg.PoolClient | pg.Pool,
+    schemaName: string,
+    definitionId: string,
+  ) {
+    await admin.query(`SET search_path TO "${schemaName}"`);
+    await admin.query(
+      `INSERT INTO dataset_definitions
+        (id, name, source_schema, source_table, target_column)
+       VALUES ($1, 'Recovery energy', $2, 'energy_readings', 'energy_usage')`,
+      [definitionId, schemaName],
+    );
+    await admin.query(
+      `INSERT INTO dataset_columns
+        (dataset_definition_id, column_name, role, data_type, description,
+         is_nullable, position)
+       VALUES
+        ($1, 'temperature', 'feature', 'number', 'Air temperature', false, 0),
+        ($1, 'energy_usage', 'target', 'number', 'Energy used', false, 1)`,
+      [definitionId],
+    );
+    await admin.query(
+      `INSERT INTO dataset_snapshots
+        (dataset_definition_id, storage_uri, storage_format, content_sha256,
+         row_count, schema_summary, frozen_at)
+       VALUES ($1, $2, 'parquet', $3, 12, '{}', now())`,
+      [
+        definitionId,
+        `snapshots/${definitionId}.parquet`,
+        createHash("sha256").update(definitionId).digest("hex"),
+      ],
+    );
+    await admin.query("SET search_path TO public");
+  }
+
+  function trainInput(definitionId: string) {
+    return { datasetDefinitionId: definitionId };
+  }
+
+  async function attemptCreation(
+    fixture: { schemaName: string },
+    definitionId: string,
+  ) {
+    return withTenantTransaction(fixture.schemaName, (client) =>
+      createTrainingJob(
+        createTrainingJobRepository(client),
+        fixture.schemaName,
+        actingUserId,
+        trainInput(definitionId),
+      ),
+    );
+  }
+
+  test(
+    "an expired claim stops burning quota once the submission flow sweeps it",
+    async () => {
+      const fixture = await makeFixture();
+      const previousMax = process.env.TRAINING_MAX_ACTIVE_JOBS;
+      process.env.TRAINING_MAX_ACTIVE_JOBS = "1";
+      const recoveryDefinitionId =
+        "77777777-7777-4777-8777-777777777777";
+      const secondDefinitionId =
+        "88888888-8888-4888-8888-888888888888";
+
+      try {
+        const admin = await adminPool.connect();
+        let occupier: ClaimedJobFixture;
+
+        try {
+          await seedDataset(admin, fixture.schemaName);
+          occupier = await seedClaimedJob(admin, fixture.schemaName);
+          await seedTrainableDefinition(
+            admin,
+            fixture.schemaName,
+            recoveryDefinitionId,
+          );
+          await seedTrainableDefinition(
+            admin,
+            fixture.schemaName,
+            secondDefinitionId,
+          );
+        } finally {
+          admin.release();
+        }
+
+        const blocked = await attemptCreation(
+          fixture,
+          recoveryDefinitionId,
+        );
+        expect(blocked.ok).toBe(false);
+        if (!blocked.ok) {
+          expect(blocked.status).toBe(429);
+          expect(blocked.body.error.code).toBe("TRAINING_QUOTA_EXCEEDED");
+        }
+
+        await adminPool.query(
+          `UPDATE "${fixture.schemaName}".training_jobs
+           SET heartbeat_at = now() - interval '1 hour'
+           WHERE id = $1`,
+          [occupier.jobId],
+        );
+
+        const freed = await attemptCreation(fixture, secondDefinitionId);
+        expect(freed.ok).toBe(true);
+
+        const deadRow = await adminPool.query<{
+          status: string;
+          error_code: string | null;
+          finished_at: Date | null;
+        }>(
+          `SELECT status, error_code, finished_at
+           FROM "${fixture.schemaName}".training_jobs WHERE id = $1`,
+          [occupier.jobId],
+        );
+        expect(deadRow.rows[0]?.status).toBe("dead");
+        expect(deadRow.rows[0]?.error_code).toBe("HEARTBEAT_EXPIRED");
+        expect(deadRow.rows[0]?.finished_at).not.toBeNull();
+      } finally {
+        if (previousMax === undefined) {
+          delete process.env.TRAINING_MAX_ACTIVE_JOBS;
+        } else {
+          process.env.TRAINING_MAX_ACTIVE_JOBS = previousMax;
+        }
+        await rm(fixture.storageRoot, { recursive: true, force: true });
+        await dropSchema(fixture.schemaName);
+      }
+    },
+  );
+
+  test("a fresh-heartbeat claim survives the sweep untouched", async () => {
+    const fixture = await makeFixture();
+
+    try {
+      const admin = await adminPool.connect();
+      let survivor: ClaimedJobFixture;
+
+      try {
+        await seedDataset(admin, fixture.schemaName);
+        survivor = await seedClaimedJob(admin, fixture.schemaName);
+      } finally {
+        admin.release();
+      }
+
+      const recovered = await withTenantTransaction(
+        fixture.schemaName,
+        (client) =>
+          recoverAbandonedTrainingJobsClient(client, 180),
+      );
+      expect(recovered).toBe(0);
+
+      const jobRow = await adminPool.query<{ status: string }>(
+        `SELECT status FROM "${fixture.schemaName}".training_jobs WHERE id = $1`,
+        [survivor.jobId],
+      );
+      expect(jobRow.rows[0]?.status).toBe("running");
+    } finally {
+      await rm(fixture.storageRoot, { recursive: true, force: true });
+      await dropSchema(fixture.schemaName);
+    }
+  });
+});
 
 
 
@@ -1063,3 +1237,126 @@ async function directoryEmptyOfOnnx(storageRoot: string): Promise<boolean> {
     return true;
   }
 }
+
+describe("adaptive heartbeat expiry", () => {
+  test("long-runtime claims survive the configured floor but are swept past their own bound", async () => {
+    const fixture = await makeFixture();
+
+    try {
+      const admin = await adminPool.connect();
+      let job: ClaimedJobFixture;
+
+      try {
+        await seedDataset(admin, fixture.schemaName);
+        job = await seedClaimedJob(admin, fixture.schemaName);
+      } finally {
+        admin.release();
+      }
+
+      // Moderately stale: past the 180s configured floor, but well inside
+      // the 900s adaptive bound derived from max_runtime_seconds = 600.
+      await adminPool.query(
+        `UPDATE "${fixture.schemaName}".training_jobs
+         SET heartbeat_at = now() - interval '400 seconds'
+         WHERE id = $1`,
+        [job.jobId],
+      );
+
+      const survivedClient = await registrationPool.connect();
+      let recovered: number;
+      try {
+        await survivedClient.query(
+          `SET search_path TO "${fixture.schemaName}"`,
+        );
+        recovered = await recoverAbandonedTrainingJobsClient(
+          survivedClient,
+          180,
+        );
+      } finally {
+        survivedClient.release();
+      }
+      expect(recovered).toBe(0);
+
+      let status = await adminPool.query<{ status: string }>(
+        `SELECT status FROM "${fixture.schemaName}".training_jobs WHERE id = $1`,
+        [job.jobId],
+      );
+      expect(status.rows[0]?.status).toBe("running");
+
+      // Beyond the adaptive bound the claim is swept.
+      await adminPool.query(
+        `UPDATE "${fixture.schemaName}".training_jobs
+         SET heartbeat_at = now() - interval '1000 seconds'
+         WHERE id = $1`,
+        [job.jobId],
+      );
+
+      const sweepClient = await registrationPool.connect();
+      try {
+        await sweepClient.query(`SET search_path TO "${fixture.schemaName}"`);
+        recovered = await recoverAbandonedTrainingJobsClient(
+          sweepClient,
+          180,
+        );
+      } finally {
+        sweepClient.release();
+      }
+      expect(recovered).toBe(1);
+
+      const swept = await adminPool.query<{
+        status: string;
+        error_code: string | null;
+      }>(
+        `SELECT status, error_code FROM "${fixture.schemaName}".training_jobs WHERE id = $1`,
+        [job.jobId],
+      );
+      expect(swept.rows[0]?.status).toBe("dead");
+      expect(swept.rows[0]?.error_code).toBe("HEARTBEAT_EXPIRED");
+    } finally {
+      await rm(fixture.storageRoot, { recursive: true, force: true });
+      await dropSchema(fixture.schemaName);
+    }
+  });
+
+  test("short-runtime claims are swept at the configured floor", async () => {
+    const fixture = await makeFixture();
+
+    try {
+      const admin = await adminPool.connect();
+      let job: ClaimedJobFixture;
+
+      try {
+        await seedDataset(admin, fixture.schemaName);
+        job = await seedClaimedJob(admin, fixture.schemaName);
+        await adminPool.query(
+          `UPDATE "${fixture.schemaName}".training_jobs
+           SET max_runtime_seconds = 60,
+               heartbeat_at = now() - interval '200 seconds'
+           WHERE id = $1`,
+          [job.jobId],
+        );
+      } finally {
+        admin.release();
+      }
+
+      const client = await registrationPool.connect();
+      let recovered: number;
+      try {
+        await client.query(`SET search_path TO "${fixture.schemaName}"`);
+        recovered = await recoverAbandonedTrainingJobsClient(client, 180);
+      } finally {
+        client.release();
+      }
+      expect(recovered).toBe(1);
+
+      const jobRow = await adminPool.query<{ status: string }>(
+        `SELECT status FROM "${fixture.schemaName}".training_jobs WHERE id = $1`,
+        [job.jobId],
+      );
+      expect(jobRow.rows[0]?.status).toBe("dead");
+    } finally {
+      await rm(fixture.storageRoot, { recursive: true, force: true });
+      await dropSchema(fixture.schemaName);
+    }
+  });
+});

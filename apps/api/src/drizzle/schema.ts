@@ -919,6 +919,7 @@ export const trainingJobsColumns = {
 	finishedAt: timestamp('finished_at', { withTimezone: true }),
 	errorCode: varchar('error_code', { length: 100 }),
 	errorMessage: text('error_message'),
+	workerLog: text('worker_log'),
 	maxRuntimeSeconds: integer('max_runtime_seconds').notNull(),
 };
 

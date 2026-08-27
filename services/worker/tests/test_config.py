@@ -192,3 +192,21 @@ class TestConfigErrors:
         with pytest.raises(InvalidEnvironmentValueError) as excinfo:
             WorkerConfig.from_env(base_env(WORKER_LOG_LEVEL="verbose"))
         assert excinfo.value.variable == "WORKER_LOG_LEVEL"
+
+
+class TestWorkerLogConfig:
+    def test_worker_log_max_chars_default(self):
+        config = WorkerConfig.from_env(base_env())
+        assert config.log_max_chars == 8192
+
+    def test_worker_log_max_chars_loaded(self):
+        config = WorkerConfig.from_env(
+            base_env(WORKER_LOG_MAX_CHARS="4096")
+        )
+        assert config.log_max_chars == 4096
+
+    @pytest.mark.parametrize("raw", ["0", "-1", "abc"])
+    def test_invalid_worker_log_max_chars_rejected(self, raw):
+        with pytest.raises(InvalidEnvironmentValueError) as excinfo:
+            WorkerConfig.from_env(base_env(WORKER_LOG_MAX_CHARS=raw))
+        assert excinfo.value.variable == "WORKER_LOG_MAX_CHARS"

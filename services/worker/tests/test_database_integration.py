@@ -48,6 +48,7 @@ CREATE TABLE training_jobs (
     finished_at timestamptz,
     error_code varchar(100),
     error_message text,
+    worker_log text,
     max_runtime_seconds integer NOT NULL DEFAULT 600,
     is_active boolean NOT NULL DEFAULT true,
     updated_at timestamptz NOT NULL DEFAULT now()
@@ -534,3 +535,62 @@ class TestCancellationGuarantees:
         status, claimed_by, _ = job_status(admin, tenant_schema, job_id)
         assert status == "cancelled"
         assert claimed_by == "worker-a"
+
+
+class TestWorkerLog:
+    def test_cap_keeps_recent_tail_and_drops_torn_line(
+        self, worker, admin, tenant_schema
+    ):
+        job_id, _ = insert_queued_job(admin, tenant_schema)
+        worker.claim_next_job("worker-a", tenant_schema)
+
+        worker.append_worker_log(
+            worker_id="worker-a",
+            schema_name=tenant_schema,
+            job_id=job_id,
+            entry="A" * 100 + "\n",
+            max_chars=128,
+        )
+        worker.append_worker_log(
+            worker_id="worker-a",
+            schema_name=tenant_schema,
+            job_id=job_id,
+            entry="B" * 100 + "\n",
+            max_chars=128,
+        )
+
+        with admin.cursor() as cursor:
+            cursor.execute(f'SET search_path TO "{tenant_schema}"')
+            cursor.execute(
+                "SELECT worker_log FROM training_jobs WHERE id = %s",
+                (job_id,),
+            )
+            stored = cursor.fetchone()[0]
+
+        assert stored is not None
+        assert len(stored) <= 128
+        assert stored == "B" * 100 + "\n"
+
+    def test_append_is_guarded_against_terminal_jobs(
+        self, worker, admin, tenant_schema
+    ):
+        job_id, _ = insert_queued_job(admin, tenant_schema)
+        worker.claim_next_job("worker-a", tenant_schema)
+
+        with admin.transaction():
+            with admin.cursor() as cursor:
+                cursor.execute(f'SET LOCAL search_path TO "{tenant_schema}"')
+                cursor.execute(
+                    "UPDATE training_jobs SET status = 'cancelled', "
+                    "finished_at = now() WHERE id = %s",
+                    (job_id,),
+                )
+
+        with pytest.raises(JobStateConflictError):
+            worker.append_worker_log(
+                worker_id="worker-a",
+                schema_name=tenant_schema,
+                job_id=job_id,
+                entry="late entry\n",
+                max_chars=8192,
+            )

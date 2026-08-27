@@ -50,6 +50,7 @@ function createRepository(overrides: Partial<TrainingJobRepository> = {}): Train
     }),
     lockTrainingSubmissionQuota: async () => {},
     countActiveTrainingJobs: async () => 0,
+    recoverAbandonedTrainingJobs: async () => 0,
     insertTrainingJob: async (input) => ({
       id: "44444444-4444-4444-8444-444444444444",
       queuedAt: new Date("2026-08-12T08:00:00.000Z"),
@@ -384,5 +385,93 @@ describe("cancelTrainingJobRequest", () => {
     expect(result.status).toBe(409);
     expect(result.body.error.code).toBe("JOB_TERMINAL_STATE");
     expect(result.body.error.message).toContain("'succeeded'");
+  });
+});
+
+describe("createTrainingJob heartbeat-expiry recovery", () => {
+  test("recovers abandoned jobs before observing the quota", async () => {
+    const previousExpiry = process.env.TRAINING_HEARTBEAT_EXPIRY_SECONDS;
+    delete process.env.TRAINING_HEARTBEAT_EXPIRY_SECONDS;
+    const callOrder: string[] = [];
+    let recoveredCount = 2;
+
+    const repository = createRepository({
+      recoverAbandonedTrainingJobs: async (expirySeconds) => {
+        callOrder.push(`recover:${expirySeconds}`);
+        return recoveredCount;
+      },
+      lockTrainingSubmissionQuota: async () => {
+        callOrder.push("quota-lock");
+        // The quota check must observe the post-recovery state.
+        recoveredCount = 0;
+      },
+      countActiveTrainingJobs: async () => recoveredCount,
+    });
+
+    const result = await createTrainingJob(
+      repository,
+      schemaName,
+      userId,
+      createInput(),
+    );
+
+    expect(result.ok).toBe(true);
+    expect(callOrder).toEqual(["recover:180", "quota-lock"]);
+
+    if (previousExpiry === undefined) {
+      delete process.env.TRAINING_HEARTBEAT_EXPIRY_SECONDS;
+    } else {
+      process.env.TRAINING_HEARTBEAT_EXPIRY_SECONDS = previousExpiry;
+    }
+  });
+
+  test("passes the configured expiry threshold to the repository", async () => {
+    const previous = process.env.TRAINING_HEARTBEAT_EXPIRY_SECONDS;
+    process.env.TRAINING_HEARTBEAT_EXPIRY_SECONDS = "42";
+
+    try {
+      const receivedExpiry: number[] = [];
+      const repository = createRepository({
+        recoverAbandonedTrainingJobs: async (expirySeconds) => {
+          receivedExpiry.push(expirySeconds);
+          return 0;
+        },
+      });
+
+      await createTrainingJob(repository, schemaName, userId, createInput());
+
+      expect(receivedExpiry).toEqual([42]);
+    } finally {
+      if (previous === undefined) {
+        delete process.env.TRAINING_HEARTBEAT_EXPIRY_SECONDS;
+      } else {
+        process.env.TRAINING_HEARTBEAT_EXPIRY_SECONDS = previous;
+      }
+    }
+  });
+
+  test("falls back to the default expiry on malformed configuration", async () => {
+    const previous = process.env.TRAINING_HEARTBEAT_EXPIRY_SECONDS;
+    process.env.TRAINING_HEARTBEAT_EXPIRY_SECONDS = "soon";
+
+    try {
+      const receivedExpiry: number[] = [];
+      const repository = createRepository({
+        recoverAbandonedTrainingJobs: async (expirySeconds) => {
+          receivedExpiry.push(expirySeconds);
+          return 0;
+        },
+      });
+
+      await createTrainingJob(repository, schemaName, userId, createInput());
+
+      expect(receivedExpiry).toEqual([180]);
+    } finally {
+      if (previous === undefined) {
+        delete process.env.TRAINING_HEARTBEAT_EXPIRY_SECONDS;
+      } else {
+        process.env.TRAINING_HEARTBEAT_EXPIRY_SECONDS = previous;
+      }
+    }
   });
 });

@@ -27,6 +27,7 @@ DEFAULT_MAX_SNAPSHOT_BYTES = 512 * 1024 * 1024
 DEFAULT_MAX_SNAPSHOT_ROWS = 10_000_000
 DEFAULT_SUBMISSION_TIMEOUT_SECONDS = 10
 DEFAULT_SUBMISSION_MAX_ATTEMPTS = 3
+DEFAULT_WORKER_LOG_MAX_CHARS = 8192
 DEFAULT_LOG_LEVEL = "INFO"
 
 VALID_LOG_LEVELS = ("CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG")
@@ -50,6 +51,7 @@ class WorkerConfig:
     max_snapshot_rows: int = DEFAULT_MAX_SNAPSHOT_ROWS
     submission_timeout_seconds: int = DEFAULT_SUBMISSION_TIMEOUT_SECONDS
     submission_max_attempts: int = DEFAULT_SUBMISSION_MAX_ATTEMPTS
+    log_max_chars: int = DEFAULT_WORKER_LOG_MAX_CHARS
 
     @classmethod
     def from_env(
@@ -97,6 +99,9 @@ class WorkerConfig:
             "WORKER_SUBMISSION_MAX_ATTEMPTS",
             DEFAULT_SUBMISSION_MAX_ATTEMPTS,
         )
+        log_max_chars = _positive_int(
+            values, "WORKER_LOG_MAX_CHARS", DEFAULT_WORKER_LOG_MAX_CHARS
+        )
         nucleus_internal_url = _nucleus_internal_url(values)
         nucleus_result_token = _require_non_empty(
             values, "NUCLEUS_INTERNAL_TOKEN"
@@ -114,6 +119,7 @@ class WorkerConfig:
             max_snapshot_rows=max_snapshot_rows,
             submission_timeout_seconds=submission_timeout_seconds,
             submission_max_attempts=submission_max_attempts,
+            log_max_chars=log_max_chars,
             nucleus_internal_url=nucleus_internal_url,
             nucleus_result_token=nucleus_result_token,
             log_level=log_level,

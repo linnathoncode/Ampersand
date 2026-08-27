@@ -211,3 +211,38 @@ export async function cancelTrainingJob(
 
   return { ok: false, reason: "terminal", currentStatus: row.status };
 }
+
+const RECOVER_ABANDONED_JOBS_SQL = `
+    UPDATE training_jobs
+    SET status = 'dead',
+        finished_at = now(),
+        updated_at = now(),
+        error_code = 'HEARTBEAT_EXPIRED',
+        error_message = 'Claim expired without a heartbeat'
+    WHERE status = 'running'
+      AND heartbeat_at < now()
+              - GREATEST(
+                  make_interval(secs => $1),
+                  make_interval(secs => max_runtime_seconds * 3 / 2)
+                )
+`;
+
+/**
+ * Transitions running jobs whose heartbeat is older than the expiry
+ * threshold to ``dead``. The threshold is evaluated per row: at least the
+ * configured expiry, but never shorter than one and a half times the
+ * job's own runtime bound, so a live worker inside a legitimate long
+ * training phase cannot be swept by a tenant-mate's submission. Row-level
+ * locks make concurrent sweeps serialize per row; the second sweep
+ * re-evaluates the predicate and skips already dead rows.
+ */
+export async function recoverAbandonedTrainingJobs(
+  pool: PoolClient,
+  expirySeconds: number,
+): Promise<number> {
+  const result = await pool.query(RECOVER_ABANDONED_JOBS_SQL, [
+    expirySeconds,
+  ]);
+
+  return result.rowCount ?? 0;
+}

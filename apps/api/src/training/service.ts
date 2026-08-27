@@ -10,6 +10,7 @@ import type { PoolClient } from "pg";
 import type { LoadedDatasetColumn } from "../dataset/repository";
 import { buildTrainingFingerprint } from "./fingerprint";
 import {
+  resolveHeartbeatExpirySeconds,
   resolveMaxActiveTrainingJobs,
   resolveTrainingConfig,
   QUEUED_TRAINING_JOB_PROGRESS_MESSAGE,
@@ -20,6 +21,7 @@ import {
   insertTrainingJob,
   loadLatestValidSnapshot,
   lockTrainingSubmissionQuota,
+  recoverAbandonedTrainingJobs,
   type CancelTrainingJobOutcome,
   type InsertedTrainingJob,
   type InsertTrainingJobInput,
@@ -42,6 +44,7 @@ export type TrainingJobRepository = {
   ): Promise<LoadedTrainingSnapshot | null>;
   lockTrainingSubmissionQuota(schemaName: string): Promise<void>;
   countActiveTrainingJobs(): Promise<number>;
+  recoverAbandonedTrainingJobs(expirySeconds: number): Promise<number>;
   insertTrainingJob(input: InsertTrainingJobInput): Promise<InsertedTrainingJob>;
   cancelTrainingJob(jobId: string): Promise<CancelTrainingJobOutcome>;
 };
@@ -59,6 +62,8 @@ export function createTrainingJobRepository(
     lockTrainingSubmissionQuota: (schemaName) =>
       lockTrainingSubmissionQuota(client, schemaName),
     countActiveTrainingJobs: () => countActiveTrainingJobs(client),
+    recoverAbandonedTrainingJobs: (expirySeconds) =>
+      recoverAbandonedTrainingJobs(client, expirySeconds),
     insertTrainingJob: (input) => insertTrainingJob(client, input),
     cancelTrainingJob: (jobId) => cancelTrainingJob(client, jobId),
   };
@@ -171,6 +176,19 @@ export async function createTrainingJob(
     snapshotContentSha256: snapshot.contentSha256,
     trainingConfig,
   });
+
+  // Abandoned running jobs otherwise inflate the active count and
+  // permanently burn a tenant quota slot, so expired claims are reaped
+  // before the quota check observes them.
+  const recovered = await repository.recoverAbandonedTrainingJobs(
+    resolveHeartbeatExpirySeconds(),
+  );
+
+  if (recovered > 0) {
+    console.log(
+      `Recovered ${recovered} heartbeat-expired training job(s) for tenant '${schemaName}'`,
+    );
+  }
 
   await repository.lockTrainingSubmissionQuota(schemaName);
 

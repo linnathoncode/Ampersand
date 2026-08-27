@@ -133,6 +133,7 @@ Stores the durable training request and acts as the PostgreSQL-backed work queue
 | `finished_at` | `timestamptz` | Yes | Time the job entered a terminal state |
 | `error_code` | `varchar(100)` | Yes | Machine-readable failure code |
 | `error_message` | `text` | Yes | Human-readable failure detail |
+| `worker_log` | `text` | Yes | Bounded worker-written log tail; recent entries kept, older lines dropped at the size cap |
 | `max_runtime_seconds` | `integer` | No | Maximum permitted runtime |
 
 ### `model_versions`

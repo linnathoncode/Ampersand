@@ -103,6 +103,39 @@ _LOAD_JOB_CONTEXT_SQL = """
     ORDER BY dc.position NULLS LAST
 """
 
+_APPEND_WORKER_LOG_SQL = """
+    WITH target AS (
+        SELECT id, worker_log
+        FROM training_jobs
+        WHERE id = %(job_id)s
+          AND claimed_by = %(worker_id)s
+          AND status = 'running'
+        FOR NO KEY UPDATE
+    ),
+    bounded AS (
+        SELECT
+            target.id,
+            right(coalesce(target.worker_log, '') || %(entry)s,
+                  %(max_chars)s) AS trimmed,
+            length(coalesce(target.worker_log, '') || %(entry)s)
+                > %(max_chars)s AS overflow
+        FROM target
+    )
+    UPDATE training_jobs tj
+    SET worker_log = CASE
+            WHEN bounded.overflow
+                 AND position(E'\n' IN bounded.trimmed) > 0
+                THEN substring(
+                    bounded.trimmed
+                    FROM position(E'\n' IN bounded.trimmed) + 1
+                )
+            ELSE bounded.trimmed
+        END,
+        updated_at = now()
+    FROM bounded
+    WHERE tj.id = bounded.id
+"""
+
 _UPDATE_PROGRESS_SQL = """
     UPDATE training_jobs
     SET progress_percent = %(progress_percent)s,
@@ -433,6 +466,51 @@ class Database:
         except Exception as exc:
             raise DatabaseConnectionError(
                 "Failed to update the training job progress"
+            ) from exc
+
+
+    def append_worker_log(
+        self,
+        *,
+        worker_id: str,
+        schema_name: str,
+        job_id: str,
+        entry: str,
+        max_chars: int,
+    ) -> None:
+        """Append one entry to the job's bounded log, keeping the tail.
+
+        The write is ownership-guarded like ``update_job_progress``: a job
+        that is cancelled or dead cannot be modified by a stale worker, and
+        the conflict is raised to the caller. The cap keeps the most recent
+        bytes and drops any partially preserved leading line.
+        """
+        _assert_tenant_schema_name(schema_name)
+        connection = self._require_connection()
+        try:
+            with connection.transaction():
+                with connection.cursor() as cursor:
+                    _scope_tenant(cursor, schema_name)
+                    cursor.execute(
+                        _APPEND_WORKER_LOG_SQL,
+                        {
+                            "worker_id": worker_id,
+                            "job_id": job_id,
+                            "entry": entry,
+                            "max_chars": max_chars,
+                        },
+                    )
+                    if cursor.rowcount == 0:
+                        self._raise_conflict(cursor, job_id, "running")
+        except (
+            DatabaseConnectionError,
+            JobOwnershipError,
+            JobStateConflictError,
+        ):
+            raise
+        except Exception as exc:
+            raise DatabaseConnectionError(
+                "Failed to append to the worker log"
             ) from exc
 
     def _raise_context_missing(
