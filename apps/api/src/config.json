@@ -92,7 +92,7 @@
       "roles": [
         {
           "name": "basic",
-          "description": "Can invoke published prediction tools"
+          "description": "Can manage datasets, models, and prediction tools"
         },
         {
           "name": "model-publisher",
@@ -149,6 +149,12 @@
           "path": "training_jobs",
           "method": "POST",
           "description": "Cancel queued or running training jobs"
+        },
+        {
+          "action": "queue",
+          "path": "training_jobs",
+          "method": "POST",
+          "description": "Queue training jobs"
         }
       ],
       "roleClaimAssignments": [
@@ -177,6 +183,12 @@
         {
           "role": "basic",
           "claims": [
+            "create",
+            "queue",
+            "cancel",
+            "publish",
+            "retire",
+            "generate",
             "invoke"
           ]
         }

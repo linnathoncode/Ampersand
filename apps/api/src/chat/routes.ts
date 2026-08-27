@@ -217,7 +217,13 @@ export function createConversationTools(
           toolName: definition.toolName,
           modelVersionId: definition.modelVersionId,
           description: definition.description,
-          inputs: Object.keys(definition.inputSchema.properties),
+          inputs: Object.entries(definition.inputSchema.properties).map(
+            ([name, property]) => ({
+              name,
+              type: property.type,
+              values: property.enum ?? [],
+            }),
+          ),
         })),
     }),
     list_source_tables: dynamicTool({

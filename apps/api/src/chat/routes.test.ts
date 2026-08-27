@@ -39,7 +39,7 @@ describe("chat routes", () => {
         userId: "63ed43b7-2f78-4fb1-a68e-6141a8eaa53f",
         schemaName: "tenant_ampersand_dev",
         authType: "access-token",
-        claims: ["create.dataset_definitions", "create.training_jobs"],
+        claims: ["create.dataset_definitions", "queue.training_jobs"],
       },
     );
 
@@ -86,7 +86,7 @@ describe("chat routes", () => {
         userId: "63ed43b7-2f78-4fb1-a68e-6141a8eaa53f",
         schemaName: "tenant_ampersand_dev",
         authType: "access-token",
-        claims: ["create.dataset_definitions", "create.training_jobs"],
+        claims: ["create.dataset_definitions", "queue.training_jobs"],
       },
       true,
       true,

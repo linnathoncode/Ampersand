@@ -4,7 +4,8 @@ import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport, type UIMessage } from "ai";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import type { SourceTable } from "@ampersand/contracts";
+import Markdown from "react-markdown";
+import type { GeneratedToolDefinition, SourceTable } from "@ampersand/contracts";
 
 import { AppShell } from "../components/app-shell";
 import {
@@ -18,6 +19,26 @@ import {
 
 const composerMaxHeight = 144;
 const terminalTrainingStatuses = new Set(["succeeded", "failed", "cancelled", "dead"]);
+const composerHints = ["Ask ampersand", "/datasets", "/tools"];
+
+const slashCommands = [
+  {
+    command: "/datasets",
+    aliases: [],
+    description: "List available datasets",
+    endpoint: "/source-tables",
+    toolName: "list_source_tables",
+  },
+  {
+    command: "/tools",
+    aliases: ["/tool"],
+    description: "List published prediction tools",
+    endpoint: "/tools",
+    toolName: "list_prediction_tools",
+  },
+] as const;
+
+type SlashCommand = (typeof slashCommands)[number];
 
 type TrainingProgress = {
   id: string;
@@ -48,6 +69,8 @@ export default function ChatPage() {
   );
   const { error, messages, sendMessage, setMessages, status, stop } = useChat({ transport });
   const [input, setInput] = useState("");
+  const [composerHintIndex, setComposerHintIndex] = useState(0);
+  const [commandError, setCommandError] = useState<string | null>(null);
   const [hasRestoredConversation, setHasRestoredConversation] = useState(false);
   const [llmStatus, setLlmStatus] = useState<
     | { state: "checking" }
@@ -67,6 +90,19 @@ export default function ChatPage() {
   const trainingIsActive =
     trainingProgress?.status === "queued" || trainingProgress?.status === "running";
   const activeToolName = findActiveToolName(messages);
+  const visibleSlashCommands = input.startsWith("/")
+    ? slashCommands.filter((command) =>
+        [command.command, ...command.aliases].some((value) =>
+          value.startsWith(input.trim().toLowerCase()),
+        ),
+      )
+    : [];
+  const isSlashCommandInput = slashCommands.some(
+    (command) =>
+      [command.command, ...command.aliases].some(
+        (value) => value === input.trim().toLowerCase(),
+      ),
+  );
 
   useEffect(() => {
     setTenant(getSelectedTenant() ?? "");
@@ -157,6 +193,16 @@ export default function ChatPage() {
       return next;
     });
   }, [conversationCacheKey, hasRestoredConversation, messages, timestampCacheKey]);
+
+  useEffect(() => {
+    if (input) return;
+
+    const timer = window.setInterval(() => {
+      setComposerHintIndex((current) => (current + 1) % composerHints.length);
+    }, 3_400);
+
+    return () => window.clearInterval(timer);
+  }, [input]);
 
   useEffect(() => {
     const animationFrame = window.requestAnimationFrame(() => {
@@ -275,6 +321,36 @@ export default function ChatPage() {
     }
   }
 
+  async function runSlashCommand(command: SlashCommand) {
+    if (!tenant || isBusy || trainingIsActive) return;
+
+    setCommandError(null);
+    setInput("");
+
+    try {
+      const response = await fetchWithAuthRedirect(`${nucleusUrl}${command.endpoint}`, {
+        credentials: "include",
+        headers: createTenantHeaders(tenant),
+        cache: "no-store",
+      });
+
+      if (!response.ok) {
+        throw new Error(await readActionError(response, "Command could not be completed"));
+      }
+
+      const output = formatSlashCommandOutput(command.toolName, await response.json());
+      setMessages((current) => [
+        ...current,
+        createSlashCommandMessage(command.command),
+        createSlashCommandResult(command.toolName, output),
+      ]);
+    } catch (reason) {
+      setCommandError(
+        reason instanceof Error ? reason.message : "Command could not be completed",
+      );
+    }
+  }
+
   return (
     <AppShell activeSection="chat" activeTab="selection" breadcrumb="Conversation">
       <section className="conversation" aria-label="Prediction conversation">
@@ -315,7 +391,11 @@ export default function ChatPage() {
                 <div className="message-content">
                   {message.parts.map((part, index) => {
                     if (part.type === "text") {
-                      return <p key={index}>{part.text}</p>;
+                      return message.role === "assistant" ? (
+                        <Markdown key={index}>{part.text}</Markdown>
+                      ) : (
+                        <p key={index}>{part.text}</p>
+                      );
                     }
 
                     if (part.type === "dynamic-tool") {
@@ -328,7 +408,7 @@ export default function ChatPage() {
                             </span>
                           </summary>
                           <div className="tool-call-body">
-                            {part.toolName !== "list_source_tables" && (
+                            {part.toolName !== "list_source_tables" && part.toolName !== "list_prediction_tools" && (
                               <div className="tool-call-section">
                                 <span>Input</span>
                                 {renderToolInput(part.input)}
@@ -415,10 +495,25 @@ export default function ChatPage() {
           )}
         </div>
 
-        {error && (
+        {(error || commandError) && (
           <div className="conversation-error" role="alert">
-            <span>{formatChatError(error)}</span>
+            <span>{commandError ?? (error ? formatChatError(error) : "")}</span>
             <button onClick={() => window.location.reload()} type="button">Reload</button>
+          </div>
+        )}
+
+        {visibleSlashCommands.length > 0 && !trainingIsActive && (
+          <div className="slash-command-menu" aria-label="Commands">
+            {visibleSlashCommands.map((command) => (
+              <button
+                key={command.command}
+                onClick={() => void runSlashCommand(command)}
+                type="button"
+              >
+                <code>{command.command}</code>
+                <span>{command.description}</span>
+              </button>
+            ))}
           </div>
         )}
 
@@ -428,7 +523,20 @@ export default function ChatPage() {
             event.preventDefault();
             const text = input.trim();
 
-            if (!text || isBusy || trainingIsActive || llmStatus.state !== "available") return;
+            if (!text || isBusy || trainingIsActive) return;
+
+            const command = slashCommands.find((candidate) =>
+              [candidate.command, ...candidate.aliases].some(
+                (value) => value === text.toLowerCase(),
+              ),
+            );
+
+            if (command) {
+              void runSlashCommand(command);
+              return;
+            }
+
+            if (llmStatus.state !== "available") return;
 
             void sendMessage({ text });
             setInput("");
@@ -438,31 +546,38 @@ export default function ChatPage() {
           }}
         >
           <label className="sr-only" htmlFor="conversation-input">Message</label>
-          <textarea
-            id="conversation-input"
-            onChange={(event) => {
-              setInput(event.target.value);
-              resizeComposer(event.currentTarget);
-            }}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" && !event.shiftKey) {
-                event.preventDefault();
-                event.currentTarget.form?.requestSubmit();
-              }
-            }}
-            placeholder="Ask ampersand"
-            ref={composerInputRef}
-            rows={1}
-            disabled={trainingIsActive}
-            value={input}
-          />
+          <div className="composer-input-wrap">
+            {!input && (
+              <span className="composer-hint" key={composerHints[composerHintIndex]} aria-hidden="true">
+                {composerHints[composerHintIndex]}
+              </span>
+            )}
+            <textarea
+              id="conversation-input"
+              onChange={(event) => {
+                setInput(event.target.value);
+                resizeComposer(event.currentTarget);
+              }}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && !event.shiftKey) {
+                  event.preventDefault();
+                  event.currentTarget.form?.requestSubmit();
+                }
+              }}
+              placeholder=""
+              ref={composerInputRef}
+              rows={1}
+              disabled={trainingIsActive}
+              value={input}
+            />
+          </div>
           {isBusy ? (
             <button className="composer-stop" onClick={() => stop()} type="button">Stop</button>
           ) : (
             <button
               aria-label="Send message"
               className="composer-send"
-            disabled={!input.trim() || trainingIsActive || llmStatus.state !== "available"}
+            disabled={!input.trim() || trainingIsActive || (!isSlashCommandInput && llmStatus.state !== "available")}
               title="Send message"
               type="submit"
             >
@@ -482,6 +597,50 @@ function formatToolState(state: string): string {
   if (state === "output-available") return "Complete";
   if (state === "output-error") return "Failed";
   return "Running";
+}
+
+function createSlashCommandMessage(command: string): UIMessage {
+  return {
+    id: crypto.randomUUID(),
+    role: "user",
+    parts: [{ type: "text", text: command }],
+  } as UIMessage;
+}
+
+function createSlashCommandResult(toolName: string, output: unknown): UIMessage {
+  return {
+    id: crypto.randomUUID(),
+    role: "assistant",
+    parts: [
+      {
+        type: "dynamic-tool",
+        toolCallId: crypto.randomUUID(),
+        toolName,
+        state: "output-available",
+        input: {},
+        output,
+      },
+    ],
+  } as UIMessage;
+}
+
+function formatSlashCommandOutput(toolName: string, output: unknown): unknown {
+  if (toolName !== "list_prediction_tools" || !Array.isArray(output)) {
+    return output;
+  }
+
+  return (output as GeneratedToolDefinition[]).map((definition) => ({
+    toolName: definition.toolName,
+    modelVersionId: definition.modelVersionId,
+    description: definition.description,
+    inputs: Object.entries(definition.inputSchema.properties).map(
+      ([name, property]) => ({
+        name,
+        type: property.type,
+        values: property.enum ?? [],
+      }),
+    ),
+  }));
 }
 
 function formatToolPayload(value: unknown): string {
@@ -518,30 +677,35 @@ function renderToolOutput(
     }
 
     return (
-      <div className="source-table-results">
-        {output.tables.map((table) => (
-          <section className="source-table-result" key={table.name}>
-            <header>
-              <strong>{table.name}</strong>
-              <span>{table.rowCount.toLocaleString()} rows</span>
-            </header>
-            <table>
-              <thead>
-                <tr><th>Column</th><th>Type</th><th>Nullable</th></tr>
-              </thead>
-              <tbody>
-                {table.columns.map((column) => (
-                  <tr key={column.name}>
-                    <td>{column.name}</td>
-                    <td>{column.dataType ?? "unsupported"}</td>
-                    <td>{column.isNullable ? "Yes" : "No"}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </section>
-        ))}
-      </div>
+      <PaginatedToolResultList
+        emptyLabel="No source tables are available."
+        items={output.tables}
+        itemKey={(table) => table.name}
+        renderDetails={(table) => <SourceTableDetails table={table} />}
+        renderSummary={(table) => (
+          <>
+            <strong>{table.name}</strong>
+            <span>{table.rowCount.toLocaleString()} rows · {table.columns.length} columns</span>
+          </>
+        )}
+      />
+    );
+  }
+
+  if (toolName === "list_prediction_tools" && isPredictionToolResult(output)) {
+    return (
+      <PaginatedToolResultList
+        emptyLabel="No published prediction tools are available."
+        items={output}
+        itemKey={(tool) => tool.modelVersionId}
+        renderDetails={(tool) => <PredictionToolDetails tool={tool} />}
+        renderSummary={(tool) => (
+          <>
+            <strong>{tool.toolName}</strong>
+            <span>{tool.description || `${tool.inputs.length} accepted inputs`} · {tool.inputs.length} inputs</span>
+          </>
+        )}
+      />
     );
   }
 
@@ -639,6 +803,129 @@ function isSourceTableResult(value: unknown): value is { tables: SourceTable[] }
     "tables" in value &&
     Array.isArray(value.tables)
   );
+}
+
+type PredictionToolResult = {
+  toolName: string;
+  modelVersionId: string;
+  description: string;
+  inputs: Array<{
+    name: string;
+    type: string;
+    values: Array<string | number>;
+  }>;
+};
+
+function isPredictionToolResult(value: unknown): value is PredictionToolResult[] {
+  return (
+    Array.isArray(value) &&
+    value.every(
+      (item) =>
+        isPlainObject(item) &&
+        typeof item.toolName === "string" &&
+        typeof item.modelVersionId === "string" &&
+        typeof item.description === "string" &&
+        Array.isArray(item.inputs) &&
+        item.inputs.every(
+          (input) =>
+            isPlainObject(input) &&
+            typeof input.name === "string" &&
+            typeof input.type === "string" &&
+            Array.isArray(input.values) &&
+            input.values.every(
+              (value) => typeof value === "string" || typeof value === "number",
+            ),
+        ),
+    )
+  );
+}
+
+function PaginatedToolResultList<T>({
+  emptyLabel,
+  items,
+  itemKey,
+  renderDetails,
+  renderSummary,
+}: {
+  emptyLabel: string;
+  items: T[];
+  itemKey: (item: T) => string;
+  renderDetails: (item: T) => ReactNode;
+  renderSummary: (item: T) => ReactNode;
+}): ReactNode {
+  const pageSize = 5;
+  const [page, setPage] = useState(0);
+  const totalPages = Math.max(1, Math.ceil(items.length / pageSize));
+  const activePage = Math.min(page, totalPages - 1);
+  const visibleItems = items.slice(activePage * pageSize, (activePage + 1) * pageSize);
+
+  if (items.length === 0) {
+    return <p className="tool-result-empty">{emptyLabel}</p>;
+  }
+
+  return (
+    <div className="tool-result-list">
+      {visibleItems.map((item) => (
+        <details className="tool-result-item" key={itemKey(item)}>
+          <summary>{renderSummary(item)}</summary>
+          <div className="tool-result-details">{renderDetails(item)}</div>
+        </details>
+      ))}
+      {totalPages > 1 && (
+        <nav className="tool-result-pagination" aria-label="Result pages">
+          <button disabled={activePage === 0} onClick={() => setPage(activePage - 1)} type="button">Previous</button>
+          <span>Page {activePage + 1} of {totalPages}</span>
+          <button disabled={activePage === totalPages - 1} onClick={() => setPage(activePage + 1)} type="button">Next</button>
+        </nav>
+      )}
+    </div>
+  );
+}
+
+function SourceTableDetails({ table }: { table: SourceTable }): ReactNode {
+  return (
+    <table className="tool-result-table">
+      <thead>
+        <tr><th>Column</th><th>Type</th><th>Nullable</th></tr>
+      </thead>
+      <tbody>
+        {table.columns.map((column) => (
+          <tr key={column.name}>
+            <td>{column.name}</td>
+            <td>{column.dataType ?? "unsupported"}</td>
+            <td>{column.isNullable ? "Yes" : "No"}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+function PredictionToolDetails({ tool }: { tool: PredictionToolResult }): ReactNode {
+  return (
+    <div className="prediction-tool-details">
+      <p>{tool.description || "No description is available."}</p>
+      <div>
+        <span>Accepted inputs</span>
+        <dl>
+          {tool.inputs.map((input) => (
+            <div key={input.name}>
+              <dt><code>{input.name}</code></dt>
+              <dd>{formatPredictionInput(input)}</dd>
+            </div>
+          ))}
+        </dl>
+      </div>
+    </div>
+  );
+}
+
+function formatPredictionInput(input: PredictionToolResult["inputs"][number]): string {
+  if (input.values.length > 0) {
+    return `(${input.values.join(", ")})`;
+  }
+
+  return input.type;
 }
 
 function findActiveToolName(messages: UIMessage[]): string | null {

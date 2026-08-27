@@ -18,7 +18,7 @@ function authorizedRequest(body: unknown): Request {
       "x-user-id": "22222222-2222-4222-8222-222222222222",
       "x-tenant-schema": "ampersand_dev",
       "x-auth-type": "jwt",
-      "x-user-claims": "create.training_jobs",
+      "x-user-claims": "queue.training_jobs",
     },
     body: JSON.stringify(body),
   });
@@ -94,7 +94,7 @@ describe("training job body validation", () => {
           "x-user-id": "22222222-2222-4222-8222-222222222222",
           "x-tenant-schema": "ampersand_dev",
           "x-auth-type": "jwt",
-          "x-user-claims": "create.training_jobs",
+          "x-user-claims": "queue.training_jobs",
         },
         body: "{not json",
       }),
