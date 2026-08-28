@@ -39,7 +39,12 @@ export async function listSourceTables(
     .map((row) => row.table_name)
     .filter((name) => !MANAGED_TABLE_NAMES.has(name));
 
-  return Promise.all(sourceNames.map((name) => describeSourceTable(client, dataSchemaName, name)));
+  const sourceTables: SourceTable[] = [];
+  for (const name of sourceNames) {
+    sourceTables.push(await describeSourceTable(client, dataSchemaName, name));
+  }
+
+  return sourceTables;
 }
 
 export async function importCsvSourceTable(
@@ -118,18 +123,20 @@ async function describeSourceTable(
   schemaName: string,
   tableName: string,
 ): Promise<SourceTable> {
-  const [columnResult, countResult] = await Promise.all([
-    client.query<{ column_name: string; udt_name: string; is_nullable: string }>(
-      `SELECT column_name, udt_name, is_nullable
-       FROM information_schema.columns
-       WHERE table_schema = $1 AND table_name = $2
-       ORDER BY ordinal_position`,
-      [schemaName, tableName],
-    ),
-    client.query<{ row_count: string }>(
-      `SELECT count(*)::text AS row_count FROM ${quoteIdentifier(schemaName)}.${quoteIdentifier(tableName)}`,
-    ),
-  ]);
+  const columnResult = await client.query<{
+    column_name: string;
+    udt_name: string;
+    is_nullable: string;
+  }>(
+    `SELECT column_name, udt_name, is_nullable
+     FROM information_schema.columns
+     WHERE table_schema = $1 AND table_name = $2
+     ORDER BY ordinal_position`,
+    [schemaName, tableName],
+  );
+  const countResult = await client.query<{ row_count: string }>(
+    `SELECT count(*)::text AS row_count FROM ${quoteIdentifier(schemaName)}.${quoteIdentifier(tableName)}`,
+  );
 
   return {
     name: tableName,

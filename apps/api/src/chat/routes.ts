@@ -43,7 +43,7 @@ const CHAT_INSTRUCTIONS = `You are the Ampersand assistant. Available tools are 
 Call list_source_tables when the user asks about datasets, tables, uploaded data, or data available for training. Call it immediately instead of describing it or asking which dataset they mean.
 Call list_prediction_tools when the user asks which models or prediction tools are available. Do not call list_source_tables for that request.
 Training and prediction are different tasks. Use start_model_training only when the user explicitly asks to train, create, build, or fit a model. A request to predict, estimate, forecast, or use an existing model must never call start_model_training. For those requests, select the matching published prediction tool and collect only its actual input values.
-For training, gather a model name, source table, feature columns, and one numeric target. Never ask for, invent, or send a time column. The training service uses its deterministic seeded split for conversational training. Never invent columns or infer correlation from column names. Show a short summary and ask for confirmation. Call start_model_training only after the user confirms.
+For training, gather a model name, source table, feature columns, and one numeric target. Never ask for, invent, or send a time column. The training service uses its deterministic seeded split for conversational training. Never invent columns or infer correlation from column names. Call prepare_model_training when the user supplies a complete training request, then show its short summary and ask for confirmation. Call start_model_training only after the user confirms that prepared request.
 Confirmation is required exactly once. When start_model_training returns a queued outcome, tell the user that the job is queued and stop. Do not ask them to confirm, proceed, or start training again.
 Never send table names, column names, a target, or a feature list to a prediction tool. Prediction tools accept actual values for one observation and should only be called when the user asks for a prediction.
 Report actual tool results and explain rejections without inventing results. Respond normally when no tool is relevant.`;
@@ -120,7 +120,9 @@ export function createChatRoutes(
         };
       }
 
-      const messages = body.messages as UIMessage[];
+      const messages = deduplicateConversationMessages(
+        body.messages as UIMessage[],
+      );
 
       const definitions = await withTenantTransaction(
         auth.schemaName,
@@ -161,6 +163,19 @@ export function createChatRoutes(
 }
 
 export const chatRoutes = createChatRoutes();
+
+export function deduplicateConversationMessages(
+  messages: UIMessage[],
+): UIMessage[] {
+  const seenMessageIds = new Set<string>();
+
+  return messages.filter((message) => {
+    if (seenMessageIds.has(message.id)) return false;
+
+    seenMessageIds.add(message.id);
+    return true;
+  });
+}
 
 export function createConversationTools(
   definitions: Awaited<ReturnType<typeof getDiscoverableTools>>,
@@ -247,54 +262,61 @@ export function createConversationTools(
     hasClaim(auth, CREATE_DATASET_CLAIM) &&
     hasClaim(auth, CREATE_TRAINING_JOB_CLAIM)
   ) {
-    tools.start_model_training = dynamicTool({
-      description:
-        "Create a dataset definition, freeze its current data, and queue a model-training job after the user explicitly confirms the displayed training summary.",
-      inputSchema: jsonSchema({
-        type: "object",
-        additionalProperties: false,
-        required: ["name", "sourceTable", "features", "target"],
-        properties: {
-          name: { type: "string", minLength: 1, maxLength: 200 },
-          sourceTable: { type: "string", pattern: "^[A-Za-z_][A-Za-z0-9_]*$" },
-          features: {
-            type: "array",
-            minItems: 1,
-            items: {
-              type: "string",
-              pattern: "^[A-Za-z_][A-Za-z0-9_]*$",
-            },
-          },
-          target: {
+    const trainingInputSchema = jsonSchema({
+      type: "object",
+      additionalProperties: false,
+      required: ["name", "sourceTable", "features", "target"],
+      properties: {
+        name: { type: "string", minLength: 1, maxLength: 200 },
+        sourceTable: { type: "string", pattern: "^[A-Za-z_][A-Za-z0-9_]*$" },
+        features: {
+          type: "array",
+          minItems: 1,
+          items: {
             type: "string",
             pattern: "^[A-Za-z_][A-Za-z0-9_]*$",
           },
         },
-      }),
-      execute: async (input) => {
-        if (!trainingConfirmed) {
-          return {
-            outcome: "rejected",
-            code: "CONFIRMATION_REQUIRED",
-            message: "Show the training summary and obtain explicit confirmation first.",
-          };
-        }
-
-        const trainingInput = input as TrainingToolInput;
-        const executionKey = JSON.stringify(trainingInput);
-        let execution = trainingExecutions.get(executionKey);
-
-        if (!execution) {
-          execution = startModelTraining(
-            auth,
-            toStartModelTrainingInput(trainingInput),
-          );
-          trainingExecutions.set(executionKey, execution);
-        }
-
-        return execution;
+        target: {
+          type: "string",
+          pattern: "^[A-Za-z_][A-Za-z0-9_]*$",
+        },
       },
     });
+
+    if (!trainingConfirmed) {
+      tools.prepare_model_training = dynamicTool({
+        description:
+          "Prepare a training summary without creating a dataset, snapshot, or job. Use this only after the user has supplied a complete training request.",
+        inputSchema: trainingInputSchema,
+        execute: async (input) => ({
+          outcome: "ready",
+          training: input as TrainingToolInput,
+        }),
+      });
+    } else {
+      tools.start_model_training = dynamicTool({
+        description:
+          "Create a dataset definition, freeze its current data, and queue the training job that the user has explicitly confirmed.",
+        inputSchema: trainingInputSchema,
+        execute: async (input) => {
+
+          const trainingInput = input as TrainingToolInput;
+          const executionKey = JSON.stringify(trainingInput);
+          let execution = trainingExecutions.get(executionKey);
+
+          if (!execution) {
+            execution = startModelTraining(
+              auth,
+              toStartModelTrainingInput(trainingInput),
+            );
+            trainingExecutions.set(executionKey, execution);
+          }
+
+          return execution;
+        },
+      });
+    }
   }
 
   return tools;
@@ -364,9 +386,14 @@ export function toStartModelTrainingInput(
 }
 
 export function latestUserConfirmedTraining(messages: UIMessage[]): boolean {
-  const latestUserIndex = messages.findLastIndex(
-    (message) => message.role === "user",
-  );
+  let latestUserIndex = -1;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index]?.role === "user") {
+      latestUserIndex = index;
+      break;
+    }
+  }
+
   const latestUserMessage = messages[latestUserIndex];
   if (!latestUserMessage) return false;
 
@@ -386,29 +413,34 @@ export function latestUserConfirmedTraining(messages: UIMessage[]): boolean {
     );
   if (!isExplicitConfirmation) return false;
 
-  const latestAssistantMessage = messages
-    .slice(0, latestUserIndex)
-    .findLast((message) => message.role === "assistant");
+  for (let index = latestUserIndex - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message?.role === "user") break;
+    if (
+      message?.role === "assistant" &&
+      message.parts.some(
+        (part) =>
+          part.type === "dynamic-tool" &&
+          part.toolName === "prepare_model_training" &&
+          part.state === "output-available" &&
+          isTrainingPreparationResult(part.output),
+      )
+    ) {
+      return true;
+    }
+  }
 
-  return latestAssistantMessage?.parts.some(
-    (part) =>
-      part.type === "dynamic-tool" &&
-      part.toolName === "start_model_training" &&
-      part.state === "output-available" &&
-      isConfirmationRequiredResult(part.output),
-  ) ?? false;
+  return false;
 }
 
-function isConfirmationRequiredResult(
+function isTrainingPreparationResult(
   value: unknown,
-): value is { outcome: "rejected"; code: "CONFIRMATION_REQUIRED" } {
+): value is { outcome: "ready" } {
   return (
     typeof value === "object" &&
     value !== null &&
     "outcome" in value &&
-    value.outcome === "rejected" &&
-    "code" in value &&
-    value.code === "CONFIRMATION_REQUIRED"
+    value.outcome === "ready"
   );
 }
 

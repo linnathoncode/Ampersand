@@ -5,6 +5,7 @@ import {
   createChatRoutes,
   conversationHasQueuedTraining,
   createConversationTools,
+  deduplicateConversationMessages,
   latestUserConfirmedTraining,
   toStartModelTrainingInput,
 } from "./routes";
@@ -31,7 +32,7 @@ describe("chat routes", () => {
     expect(Object.keys(tools)).toEqual(["list_prediction_tools", "list_source_tables"]);
   });
 
-  it("exposes training submission to users with both claims", () => {
+  it("exposes training preparation before confirmation", () => {
     const tools = createConversationTools(
       [],
       "conversation-1",
@@ -43,20 +44,36 @@ describe("chat routes", () => {
       },
     );
 
-    expect(Object.keys(tools)).toContain("start_model_training");
+    expect(Object.keys(tools)).toContain("prepare_model_training");
+    expect(Object.keys(tools)).not.toContain("start_model_training");
   });
 
   it("recognizes an explicit confirmation immediately after a training summary", () => {
     expect(
-      latestUserConfirmedTraining([confirmationRequiredMessage(), userMessage("yes")]),
+      latestUserConfirmedTraining([trainingPreparedMessage(), userMessage("yes")]),
     ).toBe(true);
     expect(
-      latestUserConfirmedTraining([confirmationRequiredMessage(), userMessage("/train")]),
+      latestUserConfirmedTraining([trainingPreparedMessage(), userMessage("/train")]),
+    ).toBe(true);
+    expect(
+      latestUserConfirmedTraining([
+        trainingPreparedMessage(),
+        assistantMessage("Confirm to queue the job."),
+        userMessage("Confirm"),
+      ]),
     ).toBe(true);
     expect(latestUserConfirmedTraining([userMessage("Start training.")])).toBe(false);
     expect(
-      latestUserConfirmedTraining([confirmationRequiredMessage(), userMessage("What would this train?")]),
+      latestUserConfirmedTraining([trainingPreparedMessage(), userMessage("What would this train?")]),
     ).toBe(false);
+  });
+
+  it("removes duplicate conversation messages before model conversion", () => {
+    const original = userMessage("List prediction tools");
+
+    expect(
+      deduplicateConversationMessages([original, original]),
+    ).toEqual([original]);
   });
 
   it("converts simple training tool inputs into the internal contract", () => {
@@ -99,6 +116,23 @@ describe("chat routes", () => {
     );
 
     expect(Object.keys(tools)).not.toContain("start_model_training");
+  });
+
+  it("exposes training submission only after confirmation", () => {
+    const tools = createConversationTools(
+      [],
+      "conversation-1",
+      {
+        userId: "63ed43b7-2f78-4fb1-a68e-6141a8eaa53f",
+        schemaName: "tenant_ampersand_dev",
+        authType: "access-token",
+        claims: ["create.dataset_definitions", "queue.training_jobs"],
+      },
+      true,
+    );
+
+    expect(Object.keys(tools)).toContain("start_model_training");
+    expect(Object.keys(tools)).not.toContain("prepare_model_training");
   });
 
   it("requires authentication", async () => {
@@ -172,23 +206,30 @@ function queuedTrainingMessage() {
   };
 }
 
-function confirmationRequiredMessage() {
+function trainingPreparedMessage() {
   return {
     id: "message-confirmation",
     role: "assistant" as const,
     parts: [
       {
         type: "dynamic-tool" as const,
-        toolName: "start_model_training",
+        toolName: "prepare_model_training",
         toolCallId: "training-call-1",
         state: "output-available" as const,
         input: {},
         output: {
-          outcome: "rejected" as const,
-          code: "CONFIRMATION_REQUIRED" as const,
+          outcome: "ready" as const,
         },
       },
     ],
+  };
+}
+
+function assistantMessage(text: string) {
+  return {
+    id: "message-assistant",
+    role: "assistant" as const,
+    parts: [{ type: "text" as const, text }],
   };
 }
 

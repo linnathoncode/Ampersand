@@ -90,6 +90,7 @@ export default function ChatPage() {
   const isBusy = status === "submitted" || status === "streaming";
   const trainingJob = useMemo(() => findLatestQueuedTrainingJob(messages), [messages]);
   const currentTrainingJob = replacementTrainingJob ?? trainingJob;
+  const currentTrainingJobId = currentTrainingJob?.id;
   const trainingIsActive =
     trainingProgress?.status === "queued" || trainingProgress?.status === "running";
   const activeToolName = findActiveToolName(messages);
@@ -229,14 +230,14 @@ export default function ChatPage() {
   }, [messages, status]);
 
   useEffect(() => {
-    if (!currentTrainingJob || !tenant) return;
+    if (!currentTrainingJobId || !tenant) return;
 
     let cancelled = false;
     let timer: number | undefined;
 
     const loadProgress = async () => {
       const response = await fetchWithAuthRedirect(
-        `${nucleusUrl}/training-jobs/${currentTrainingJob.id}`,
+        `${nucleusUrl}/training-jobs/${currentTrainingJobId}`,
         {
           credentials: "include",
           headers: createTenantHeaders(tenant),
@@ -261,11 +262,11 @@ export default function ChatPage() {
     };
 
     setTrainingProgress({
-      id: currentTrainingJob.id,
+      id: currentTrainingJobId,
       modelVersionId: null,
-      status: currentTrainingJob.status,
-      progressPercent: currentTrainingJob.progressPercent,
-      progressMessage: currentTrainingJob.progressMessage,
+      status: "queued",
+      progressPercent: 0,
+      progressMessage: "Waiting for a worker",
       errorCode: null,
       errorMessage: null,
     });
@@ -283,7 +284,7 @@ export default function ChatPage() {
       cancelled = true;
       if (timer !== undefined) window.clearTimeout(timer);
     };
-  }, [currentTrainingJob, tenant]);
+  }, [currentTrainingJobId, tenant]);
 
   async function publishTrainingModel(modelVersionId: string) {
     if (!tenant) return;
@@ -479,10 +480,6 @@ export default function ChatPage() {
                                 {renderToolOutput(
                                   part.toolName,
                                   part.output,
-                                  part.toolName === "start_model_training" &&
-                                    isConfirmationRequiredResult(part.output)
-                                    ? () => void sendMessage({ text: "Confirm" })
-                                    : undefined,
                                 )}
                               </div>
                             )}
@@ -684,25 +681,7 @@ function formatToolPayload(value: unknown): string {
 function renderToolOutput(
   toolName: string,
   output: unknown,
-  onConfirmTraining?: () => void,
 ): ReactNode {
-  if (isConfirmationRequiredResult(output)) {
-    return (
-      <div className="tool-confirmation-result">
-        <p>{output.message}</p>
-        {onConfirmTraining && (
-          <button
-            className="tool-confirmation-button"
-            onClick={onConfirmTraining}
-            type="button"
-          >
-            Confirm and start training
-          </button>
-        )}
-      </div>
-    );
-  }
-
   if (toolName === "list_source_tables" && isSourceTableResult(output)) {
     if (output.tables.length === 0) {
       return <p className="tool-result-empty">No source tables are available.</p>;
@@ -778,19 +757,6 @@ type ValidationToolResult = {
   type: "validation";
   errors: Array<{ path: string; value: unknown; summary: string }>;
 };
-
-function isConfirmationRequiredResult(value: unknown): value is {
-  outcome: "rejected";
-  code: "CONFIRMATION_REQUIRED";
-  message: string;
-} {
-  return (
-    isPlainObject(value) &&
-    value.outcome === "rejected" &&
-    value.code === "CONFIRMATION_REQUIRED" &&
-    typeof value.message === "string"
-  );
-}
 
 function isValidationToolResult(value: unknown): value is ValidationToolResult {
   return (
@@ -1055,10 +1021,23 @@ function readCachedMessages(value: string | null): UIMessage[] | null {
   try {
     const messages = JSON.parse(value) as unknown;
 
-    return Array.isArray(messages) ? (messages as UIMessage[]) : null;
+    return Array.isArray(messages)
+      ? deduplicateCachedMessages(messages as UIMessage[])
+      : null;
   } catch {
     return null;
   }
+}
+
+function deduplicateCachedMessages(messages: UIMessage[]): UIMessage[] {
+  const seenMessageIds = new Set<string>();
+
+  return messages.filter((message) => {
+    if (seenMessageIds.has(message.id)) return false;
+
+    seenMessageIds.add(message.id);
+    return true;
+  });
 }
 
 function readCachedTimestamps(timestampCacheKey: string): Record<string, string> {
