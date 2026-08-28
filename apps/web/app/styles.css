@@ -356,20 +356,20 @@ code { color: #505650; font-family: "Cascadia Mono", Consolas, monospace; font-s
 .tool-input-fields dd, .tool-validation-result dd { min-width: 0; margin: 0; overflow-wrap: anywhere; color: #edf3ef; }
 .tool-validation-result { display: grid; gap: 10px; }
 .tool-validation-result > strong { color: #e0a2a2; font-family: "Avenir Next", Avenir, "Segoe UI", sans-serif; font-size: 12px; font-weight: 600; }
-.training-progress { display: grid; gap: 7px; margin: 14px 0 4px; padding: 10px 0; border-top: 1px solid #d8ddd9; border-bottom: 1px solid #d8ddd9; }
+.training-progress { display: grid; gap: 8px; margin: 14px 0 4px; padding: 12px 0; border-top: 1px solid #3b4b41; border-bottom: 1px solid #3b4b41; }
 .training-progress > div { display: flex; align-items: baseline; justify-content: space-between; gap: 18px; }
-.training-progress strong { color: #27342c; font-size: 12px; font-weight: 600; }
-.training-progress span, .training-progress p { color: #69756d; font-size: 11px; }
-.training-progress p { margin: 0; }
-.training-progress progress { width: 100%; height: 4px; overflow: hidden; border: 0; border-radius: 0; background: #dfe4e0; accent-color: #52735d; }
-.training-progress progress::-webkit-progress-bar { background: #dfe4e0; }
-.training-progress progress::-webkit-progress-value { background: #52735d; transition: width 180ms ease; }
-.training-progress-failed strong, .training-progress-dead strong { color: #a34b4b; }
-.training-progress-succeeded strong { color: #34734a; }
-.training-action-button { justify-self: start; margin-top: 3px; padding: 7px 12px; border: 1px solid #9eaaa1; border-radius: 0; background: #f7faf7; color: #27342c; font: inherit; font-size: 12px; cursor: pointer; }
-.training-action-button:hover:not(:disabled) { background: #e9f0ea; }
+.training-progress strong { color: #edf3ef; font-size: 12px; font-weight: 600; }
+.training-progress span { color: #b8c4bc; font-size: 11px; font-variant-numeric: tabular-nums; }
+.training-progress p { margin: 0; color: #b8c4bc; font-family: "Avenir Next", Avenir, "Segoe UI", sans-serif; font-size: 11px; line-height: 1.45; }
+.training-progress progress { width: 100%; height: 5px; overflow: hidden; border: 0; border-radius: 0; background: #31473a; accent-color: #8eb19b; }
+.training-progress progress::-webkit-progress-bar { background: #31473a; }
+.training-progress progress::-webkit-progress-value { background: #8eb19b; transition: width 180ms ease; }
+.training-progress-failed strong, .training-progress-dead strong { color: #e0a2a2; }
+.training-progress-succeeded strong { color: #8fc5a2; }
+.training-action-button { justify-self: start; margin-top: 3px; padding: 7px 12px; border: 1px solid #6f8979; border-radius: 0; background: transparent; color: #edf3ef; font: inherit; font-size: 12px; cursor: pointer; }
+.training-action-button:hover:not(:disabled) { background: #29382f; }
 .training-action-button:disabled { opacity: .55; cursor: wait; }
-.training-action-message { margin: 0; color: #52735d; font-size: 11px; }
+.training-action-message { margin: 0; color: #8fc5a2; font-size: 11px; }
 .conversation-status { --activity-cycle: 2.8s; --activity-easing: cubic-bezier(0.4, 0.15, 0.6, 0.85); --shine-easing: cubic-bezier(0.22, 1, 0.36, 1); --mark-easing: cubic-bezier(0.65, 0, 0.35, 1); display: flex; align-items: center; gap: 8px; padding: 12px 0; color: var(--muted); font-size: 12px; }
 .thinking-mark { position: relative; display: inline-block; width: 22px; height: 27px; font-family: Baskerville, "Palatino Linotype", serif; font-size: 27px; font-style: italic; line-height: 1; }
 .thinking-mark-ghost, .thinking-mark-ink { position: absolute; inset: 0; display: block; }

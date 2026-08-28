@@ -88,6 +88,13 @@ export default function ChatPage() {
   const authenticatedUserRef = useRef<string | null>(null);
   const restoredConversationKeyRef = useRef<string | null>(null);
   const isBusy = status === "submitted" || status === "streaming";
+  const assistantMessageKey = useMemo(
+    () => messages
+      .filter((message) => message.role === "assistant")
+      .map((message) => message.id)
+      .join("|"),
+    [messages],
+  );
   const trainingJob = useMemo(() => findLatestQueuedTrainingJob(messages), [messages]);
   const currentTrainingJob = replacementTrainingJob ?? trainingJob;
   const currentTrainingJobId = currentTrainingJob?.id;
@@ -185,15 +192,23 @@ export default function ChatPage() {
     if (!hasRestoredConversation) return;
 
     window.sessionStorage.setItem(conversationCacheKey, JSON.stringify(messages));
+  }, [conversationCacheKey, hasRestoredConversation, messages]);
+
+  useEffect(() => {
+    if (!hasRestoredConversation) return;
+
+    const assistantMessageIds = assistantMessageKey
+      ? assistantMessageKey.split("|")
+      : [];
 
     setMessageTimestamps((current) => {
       const next = { ...current };
       let changed = false;
 
-      for (const message of messages) {
-        if (message.role !== "assistant" || next[message.id]) continue;
+      for (const messageId of assistantMessageIds) {
+        if (next[messageId]) continue;
 
-        next[message.id] = new Date().toISOString();
+        next[messageId] = new Date().toISOString();
         changed = true;
       }
 
@@ -202,7 +217,7 @@ export default function ChatPage() {
       window.sessionStorage.setItem(timestampCacheKey, JSON.stringify(next));
       return next;
     });
-  }, [conversationCacheKey, hasRestoredConversation, messages, timestampCacheKey]);
+  }, [assistantMessageKey, hasRestoredConversation, timestampCacheKey]);
 
   useEffect(() => {
     if (input) return;
@@ -255,13 +270,15 @@ export default function ChatPage() {
       const progress = (await response.json()) as TrainingProgress;
       if (cancelled) return;
 
-      setTrainingProgress(progress);
+      setTrainingProgress((current) =>
+        hasSameTrainingProgress(current, progress) ? current : progress,
+      );
       if (!terminalTrainingStatuses.has(progress.status)) {
         timer = window.setTimeout(() => void loadProgress(), 5_000);
       }
     };
 
-    setTrainingProgress({
+    const initialProgress: TrainingProgress = {
       id: currentTrainingJobId,
       modelVersionId: null,
       status: "queued",
@@ -269,14 +286,27 @@ export default function ChatPage() {
       progressMessage: "Waiting for a worker",
       errorCode: null,
       errorMessage: null,
-    });
+    };
+    setTrainingProgress((current) =>
+      current?.id === currentTrainingJobId ? current : initialProgress,
+    );
     void loadProgress().catch(() => {
       if (!cancelled) {
-        setTrainingProgress((current) =>
-          current
-            ? { ...current, status: "failed", errorMessage: "Training progress could not be loaded" }
-            : null,
-        );
+        setTrainingProgress((current) => {
+          if (!current) return null;
+          if (
+            current.status === "failed" &&
+            current.errorMessage === "Training progress could not be loaded"
+          ) {
+            return current;
+          }
+
+          return {
+            ...current,
+            status: "failed",
+            errorMessage: "Training progress could not be loaded",
+          };
+        });
       }
     });
 
@@ -1000,6 +1030,20 @@ function isQueuedTrainingOutput(value: unknown): value is {
     typeof value.job.progressPercent === "number" &&
     (typeof value.job.progressMessage === "string" || value.job.progressMessage === null)
   );
+}
+
+function hasSameTrainingProgress(
+  current: TrainingProgress | null,
+  next: TrainingProgress,
+): boolean {
+  return current !== null &&
+    current.id === next.id &&
+    current.modelVersionId === next.modelVersionId &&
+    current.status === next.status &&
+    current.progressPercent === next.progressPercent &&
+    current.progressMessage === next.progressMessage &&
+    current.errorCode === next.errorCode &&
+    current.errorMessage === next.errorMessage;
 }
 
 function formatTrainingStatus(status: TrainingProgress["status"]): string {
