@@ -86,6 +86,7 @@ export default function ChatPage() {
   const composerInputRef = useRef<HTMLTextAreaElement>(null);
   const threadRef = useRef<HTMLDivElement>(null);
   const authenticatedUserRef = useRef<string | null>(null);
+  const restoredConversationKeyRef = useRef<string | null>(null);
   const isBusy = status === "submitted" || status === "streaming";
   const trainingJob = useMemo(() => findLatestQueuedTrainingJob(messages), [messages]);
   const currentTrainingJob = replacementTrainingJob ?? trainingJob;
@@ -118,6 +119,7 @@ export default function ChatPage() {
       if (authenticatedUserRef.current === changedUserId) return;
 
       authenticatedUserRef.current = changedUserId;
+      restoredConversationKeyRef.current = null;
       setHasRestoredConversation(false);
       setUserId(changedUserId ?? "");
     };
@@ -137,11 +139,13 @@ export default function ChatPage() {
 
   useEffect(() => {
     if (!tenant || !userId) return;
+    if (restoredConversationKeyRef.current === conversationCacheKey) return;
 
     const cachedMessages = readCachedMessages(
       window.sessionStorage.getItem(conversationCacheKey),
     );
 
+    restoredConversationKeyRef.current = conversationCacheKey;
     setMessages(cachedMessages ?? []);
     setMessageTimestamps(readCachedTimestamps(timestampCacheKey));
     setHasRestoredConversation(true);
@@ -239,6 +243,12 @@ export default function ChatPage() {
           cache: "no-store",
         },
       );
+
+      if (response.status === 429) {
+        timer = window.setTimeout(() => void loadProgress(), 10_000);
+        return;
+      }
+
       if (!response.ok) throw new Error("Training progress could not be loaded");
 
       const progress = (await response.json()) as TrainingProgress;
@@ -435,8 +445,8 @@ export default function ChatPage() {
               <p>Ask for a prediction using one of your published models.</p>
             </div>
           ) : (
-            messages.map((message) => (
-              <article className={`message message-${message.role}`} key={message.id}>
+            messages.map((message, messageIndex) => (
+              <article className={`message message-${message.role}`} key={`${message.id}-${messageIndex}`}>
                 <div className="message-content">
                   {message.parts.map((part, index) => {
                     if (part.type === "text") {
