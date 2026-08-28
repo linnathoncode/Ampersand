@@ -1,5 +1,5 @@
 import { Value } from "@sinclair/typebox/value";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "bun:test";
 
 import { hash, secondUuid, timestamp, uuid } from "../test-support";
 import {
