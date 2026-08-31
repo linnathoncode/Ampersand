@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { stat } from "node:fs/promises";
 
 import type {
   DatasetSnapshotError,
@@ -7,6 +8,15 @@ import type {
 } from "@ampersand/contracts";
 import type { PoolClient } from "pg";
 
+import {
+  resolveCursorBatchSize,
+  resolveCursorTimeoutMs,
+  resolveSnapshotRowLimit,
+} from "./config";
+import {
+  TenantStorageQuotaExceededError,
+  enforceTenantStorageQuota,
+} from "../cleanup/quota";
 import {
   isFloat64LosslessDecimal,
   NumericPrecisionLossError,
@@ -30,7 +40,6 @@ import { tenantDataSchemaName } from "./tenant-data-schema";
 const POSTGRESQL_IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const TIMEZONE_LESS_TYPES = new Set(["date", "timestamp"]);
 const PRECISE_NUMERIC_TYPES = new Set(["numeric", "decimal"]);
-const SNAPSHOT_FETCH_BATCH_SIZE = 5_000;
 
 export type CreateDatasetSnapshotResult =
   | { ok: true; body: DatasetSnapshotRecord }
@@ -148,14 +157,24 @@ export async function createDatasetSnapshot(
   };
 
   let written: WrittenSnapshot;
+  let iterator: AsyncIterator<SnapshotStorageRow[], void, void> | undefined;
   try {
-    const iterator = streamSourceRows(
+    // Bound only the cursor scan so a slow source scan fails fast without
+    // capping the subsequent quota check and snapshot insert. The setting is
+    // LOCAL and is reset explicitly after the write and automatically on
+    // commit/rollback.
+    await pool.query("SELECT set_config('statement_timeout', $1, true)", [
+      `${resolveCursorTimeoutMs()}ms`,
+    ]);
+
+    const streamIterator = streamSourceRows(
       pool,
       columns,
       sql,
       numericColumnIndexes,
-      SNAPSHOT_FETCH_BATCH_SIZE,
+      resolveCursorBatchSize(),
     )[Symbol.asyncIterator]();
+    iterator = streamIterator as AsyncIterator<SnapshotStorageRow[], void, void>;
 
     const first = await iterator.next();
     if (first.done || first.value.length === 0) {
@@ -165,16 +184,26 @@ export async function createDatasetSnapshot(
       });
     }
 
+    const rowLimit = resolveSnapshotRowLimit();
+    let scannedRows = 0;
     const rows = (async function* () {
       try {
+        scannedRows += first.value.length;
+        if (scannedRows > rowLimit) {
+          throw new SnapshotRowLimitError(scannedRows, rowLimit);
+        }
         yield first.value;
         for (;;) {
-          const next = await iterator.next();
+          const next = await iterator!.next();
           if (next.done) return;
+          scannedRows += next.value.length;
+          if (scannedRows > rowLimit) {
+            throw new SnapshotRowLimitError(scannedRows, rowLimit);
+          }
           yield next.value;
         }
       } finally {
-        await iterator.return?.().catch(() => {});
+        await iterator!.return?.().catch(() => {});
       }
     })();
 
@@ -190,6 +219,43 @@ export async function createDatasetSnapshot(
       });
     }
 
+    if (error instanceof SnapshotRowLimitError) {
+      return snapshotError(422, "SNAPSHOT_ROW_LIMIT_EXCEEDED", {
+        path: "sourceTable",
+        message: `The snapshot exceeds the maximum allowed row count of ${error.limit}`,
+      });
+    }
+
+    console.error("Snapshot write failed", error);
+    return snapshotError(502, "SNAPSHOT_STORAGE_FAILED", {
+      path: "storage",
+      message: "The snapshot could not be written to storage",
+    });
+  } finally {
+    await iterator?.return?.().catch(() => {});
+    await pool.query("SELECT set_config('statement_timeout', '0', true)").catch(() => {});
+  }
+
+  // The Parquet size is only known once the file is encoded, so the tenant
+  // quota is checked after the write but before the row is inserted. When the
+  // quota would be exceeded the file is removed and no snapshot row is created.
+  try {
+    const fileSize = (await stat(storage.resolveUri(written.uri))).size;
+    await enforceTenantStorageQuota(
+      pool,
+      schemaName,
+      (uri) => storage.resolveUri(uri),
+      fileSize,
+    );
+  } catch (error) {
+    await storage.deleteSnapshot(written.uri).catch(() => {});
+    if (error instanceof TenantStorageQuotaExceededError) {
+      return snapshotError(429, "STORAGE_QUOTA_EXCEEDED", {
+        path: "storage",
+        message: "Storing this snapshot would exceed the tenant storage quota",
+      });
+    }
+    console.error("Snapshot quota check or stat failed", error);
     return snapshotError(502, "SNAPSHOT_STORAGE_FAILED", {
       path: "storage",
       message: "The snapshot could not be written to storage",
@@ -314,6 +380,18 @@ function isUniqueViolation(error: unknown): boolean {
     "code" in error &&
     (error as { code: unknown }).code === "23505"
   );
+}
+
+class SnapshotRowLimitError extends Error {
+  readonly scanned: number;
+  readonly limit: number;
+
+  constructor(scanned: number, limit: number) {
+    super(`Snapshot exceeds the row limit of ${limit}`);
+    this.name = "SnapshotRowLimitError";
+    this.scanned = scanned;
+    this.limit = limit;
+  }
 }
 
 function snapshotError(

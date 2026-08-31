@@ -8,13 +8,14 @@ import type {
   SnapshotWorkerResult,
 } from "./encode-snapshot.worker";
 import type { ParquetWriter } from "./types";
-
-const MAX_SNAPSHOT_INPUT_BYTES = 64 * 1024 * 1024;
+import { resolveSnapshotByteLimit } from "../config";
 
 export const writeParquetSnapshot: ParquetWriter = async (snapshot) => {
   const worker = new Worker(
     new URL("./encode-snapshot.worker.ts", import.meta.url),
   );
+
+  const byteLimit = resolveSnapshotByteLimit();
 
   try {
     worker.postMessage({
@@ -25,9 +26,9 @@ export const writeParquetSnapshot: ParquetWriter = async (snapshot) => {
     let inputBytes = 0;
     for await (const batch of snapshot.rows) {
       inputBytes += estimateBatchBytes(batch);
-      if (inputBytes > MAX_SNAPSHOT_INPUT_BYTES) {
+      if (inputBytes > byteLimit) {
         throw new Error(
-          `Snapshot input exceeds the ${MAX_SNAPSHOT_INPUT_BYTES}-byte encoding limit`,
+          `Snapshot input exceeds the ${byteLimit}-byte encoding limit`,
         );
       }
 

@@ -3,11 +3,18 @@ import type {
   TrainingWorkerModelFeature,
 } from "@ampersand/contracts";
 import type { Pool, PoolClient } from "pg";
+import { stat } from "node:fs/promises";
+import { resolve } from "node:path";
 
 import {
   assertTenantSchemaName,
   withTenantTransaction,
 } from "../database/tenant-transaction";
+import {
+  TenantStorageQuotaExceededError,
+  enforceTenantStorageQuota,
+} from "../cleanup/quota";
+import { resolveArtifactSizeLimit } from "../training/config";
 import {
   buildModelArtifactPath,
   deleteArtifact,
@@ -27,7 +34,9 @@ export type CandidateRegistrationErrorCode =
   | "MODEL_ARTIFACT_CHECKSUM_MISMATCH"
   | "MODEL_VERSION_CONFLICT"
   | "MODEL_ARTIFACT_CONTENT_CONFLICT"
-  | "MODEL_FEATURE_METADATA_INVALID";
+  | "MODEL_FEATURE_METADATA_INVALID"
+  | "ARTIFACT_TOO_LARGE"
+  | "STORAGE_QUOTA_EXCEEDED";
 
 export class CandidateRegistrationError extends Error {
   readonly code: CandidateRegistrationErrorCode;
@@ -159,6 +168,31 @@ export async function registerCandidateModel(
 ): Promise<RegisteredCandidate> {
   await reassertClaimedJob(client, input.jobId, input.workerId, input.jobFingerprint);
 
+  const artifactSizeLimit = resolveArtifactSizeLimit();
+  if (input.result.artifact.sizeBytes > artifactSizeLimit) {
+    throw new CandidateRegistrationError(
+      "ARTIFACT_TOO_LARGE",
+      `The model artifact is ${input.result.artifact.sizeBytes} bytes but the limit is ${artifactSizeLimit} bytes`,
+    );
+  }
+
+  try {
+    await enforceTenantStorageQuota(
+      client,
+      input.schemaName,
+      (uri) => resolve(input.storageRoot, uri),
+      input.result.artifact.sizeBytes,
+    );
+  } catch (error) {
+    if (error instanceof TenantStorageQuotaExceededError) {
+      throw new CandidateRegistrationError(
+        "STORAGE_QUOTA_EXCEEDED",
+        `Storing this artifact would exceed the tenant storage quota of ${error.quotaBytes} bytes`,
+      );
+    }
+    throw error;
+  }
+
   const datasetDefinitionId = await lockDatasetDefinition(client, input);
 
   const nextVersion = await client.query<{ version_number: number }>(
@@ -170,6 +204,51 @@ export async function registerCandidateModel(
   const basePromoter =
     input.promote ?? createDefaultPromoter(input, datasetDefinitionId);
   const promoted = await basePromoter(versionNumber);
+
+  // Defense-in-depth: do not trust the worker-supplied sizeBytes. The claim
+  // was already checked before promotion, but a lying worker could claim 1
+  // byte, pass the quota check, promote a large file, and only be caught by
+  // verifyPromotedArtifact. Re-check the real on-disk size before inserting.
+  let effectiveSizeBytes = input.result.artifact.sizeBytes;
+  try {
+    const realSize = (await stat(promoted.absolutePath)).size;
+    effectiveSizeBytes = realSize;
+    if (realSize > artifactSizeLimit) {
+      throw new CandidateRegistrationError(
+        "ARTIFACT_TOO_LARGE",
+        `The promoted artifact is ${realSize} bytes but the limit is ${artifactSizeLimit} bytes`,
+      );
+    }
+    // Always re-check quota with authoritative size, the xact lock is
+    // re-entrant so this does not deadlock.
+    try {
+      await enforceTenantStorageQuota(
+        client,
+        input.schemaName,
+        (uri) => resolve(input.storageRoot, uri),
+        realSize,
+      );
+    } catch (error) {
+      if (error instanceof TenantStorageQuotaExceededError) {
+        throw new CandidateRegistrationError(
+          "STORAGE_QUOTA_EXCEEDED",
+          `Storing this artifact would exceed the tenant storage quota of ${error.quotaBytes} bytes`,
+        );
+      }
+      throw error;
+    }
+  } catch (error) {
+    if (error instanceof CandidateRegistrationError) {
+      throw error;
+    }
+    if ((error as NodeJS.ErrnoException)?.code === "ENOENT") {
+      throw new CandidateRegistrationError(
+        "MODEL_ARTIFACT_PROMOTION_FAILED",
+        `Promoted artifact not found at ${promoted.absolutePath}`,
+      );
+    }
+    throw error;
+  }
 
   const joinedFeatures = await joinFeatureMetadata(
     client,
@@ -193,7 +272,7 @@ export async function registerCandidateModel(
     modelVersionId,
     promoted.storageUri,
     input.result.artifact.contentSha256,
-    input.result.artifact.sizeBytes,
+    effectiveSizeBytes,
     input.workerId,
   ]);
 

@@ -74,6 +74,8 @@ export const DatasetSnapshotErrorCodeDto = Type.Union([
   Type.Literal("DATASET_COLUMN_PRECISION_LOSS"),
   Type.Literal("DATASET_DEFINITION_HAS_NO_COLUMNS"),
   Type.Literal("SNAPSHOT_EMPTY_TABLE"),
+  Type.Literal("SNAPSHOT_ROW_LIMIT_EXCEEDED"),
+  Type.Literal("STORAGE_QUOTA_EXCEEDED"),
   Type.Literal("SNAPSHOT_STORAGE_FAILED"),
   Type.Literal("SNAPSHOT_CONTENT_COLLISION"),
 ]);

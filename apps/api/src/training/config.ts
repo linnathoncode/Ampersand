@@ -2,10 +2,15 @@ import type { ResolvedTrainingConfig } from "@ampersand/contracts";
 
 import { Value } from "@sinclair/typebox/value";
 import { ResolvedTrainingConfigDto } from "@ampersand/contracts";
+import { resolvePositiveInt } from "../utils/env";
 
 export const DEFAULT_MAX_ACTIVE_TRAINING_JOBS = 5;
 
 export const DEFAULT_HEARTBEAT_EXPIRY_SECONDS = 180;
+
+export const DEFAULT_TRAINING_RUNTIME_SECONDS = 600;
+
+export const DEFAULT_ARTIFACT_SIZE_LIMIT_BYTES = 100 * 1024 * 1024;
 
 export const QUEUED_TRAINING_JOB_PROGRESS_MESSAGE = "Waiting for a worker";
 
@@ -16,7 +21,7 @@ export function resolveTrainingConfig(): ResolvedTrainingConfig {
     randomSeed: 42,
     splitStrategy: "chronological",
     testFraction: 0.2,
-    maxRuntimeSeconds: 600,
+    maxRuntimeSeconds: resolveTrainingRuntimeSeconds(),
   };
 
   if (!Value.Check(ResolvedTrainingConfigDto, config)) {
@@ -54,4 +59,23 @@ export function resolveHeartbeatExpirySeconds(): number {
   }
 
   return value;
+}
+
+export function resolveTrainingRuntimeSeconds(): number {
+  return resolvePositiveInt(
+    process.env.TRAINING_MAX_RUNTIME_SECONDS,
+    DEFAULT_TRAINING_RUNTIME_SECONDS,
+  );
+}
+
+/**
+ * Authoritative upper bound on the encoded model artifact size. Larger payloads
+ * are rejected before promotion. Returns the configured limit or its default;
+ * invalid values fall back to the default rather than disabling the check.
+ */
+export function resolveArtifactSizeLimit(): number {
+  return resolvePositiveInt(
+    process.env.ARTIFACT_MAX_SIZE_BYTES,
+    DEFAULT_ARTIFACT_SIZE_LIMIT_BYTES,
+  );
 }

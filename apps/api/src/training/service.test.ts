@@ -222,17 +222,24 @@ describe("createTrainingJob", () => {
   });
 
   test("rejects a request when the tenant quota is reached", async () => {
-    const result = await createTrainingJob(
-      createRepository({ countActiveTrainingJobs: async () => 5 }),
-      schemaName,
-      userId,
-      createInput(),
-    );
+    const previousQuota = process.env.TRAINING_MAX_ACTIVE_JOBS;
+    process.env.TRAINING_MAX_ACTIVE_JOBS = "5";
+    try {
+      const result = await createTrainingJob(
+        createRepository({ countActiveTrainingJobs: async () => 5 }),
+        schemaName,
+        userId,
+        createInput(),
+      );
 
-    expect(result.ok).toBe(false);
-    if (result.ok) throw new Error("expected failure");
-    expect(result.status).toBe(429);
-    expect(result.body.error.code).toBe("TRAINING_QUOTA_EXCEEDED");
+      expect(result.ok).toBe(false);
+      if (result.ok) throw new Error("expected failure");
+      expect(result.status).toBe(429);
+      expect(result.body.error.code).toBe("TRAINING_QUOTA_EXCEEDED");
+    } finally {
+      if (previousQuota === undefined) delete process.env.TRAINING_MAX_ACTIVE_JOBS;
+      else process.env.TRAINING_MAX_ACTIVE_JOBS = previousQuota;
+    }
   });
 
   test("acquires the tenant quota lock before counting active jobs", async () => {

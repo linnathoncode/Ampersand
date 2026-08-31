@@ -46,10 +46,16 @@ const jobId = "11111111-1111-4111-8111-111111111111";
 function recordingPromoter(promotedVersions: number[] = []) {
   return async (versionNumber: number) => {
     promotedVersions.push(versionNumber);
-
+    const absolutePath = `/tmp/artifacts/models/${definitionId}/v${versionNumber}/${jobId}.onnx`;
+    try {
+      const { mkdir, writeFile } = await import("node:fs/promises");
+      const { dirname } = await import("node:path");
+      await mkdir(dirname(absolutePath), { recursive: true });
+      await writeFile(absolutePath, Buffer.alloc(128));
+    } catch {}
     return {
       storageUri: `models/${definitionId}/v${versionNumber}/${jobId}.onnx`,
-      absolutePath: `/tmp/artifacts/models/${definitionId}/v${versionNumber}/${jobId}.onnx`,
+      absolutePath,
     };
   };
 }
